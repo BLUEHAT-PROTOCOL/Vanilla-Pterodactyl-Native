@@ -1,0 +1,45 @@
+# Dependencies
+vendor/
+node_modules/
+
+# Runtime / env secrets
+.env
+.env.production
+*.env
+!*.env.example
+!config.env.example
+
+# Keys & credentials
+*.pem
+*.key
+*keys*.txt
+credentials*.json
+
+# Build artifacts
+daemon/ptero-native
+daemon/bin/
+*.zip
+*.tar.gz
+
+# Logs / cache / temp
+*.log
+storage/logs/*
+!storage/logs/.gitignore
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+bootstrap/cache/*
+!bootstrap/cache/.gitignore
+
+# Database (local dev only)
+*.sqlite
+*.db
+mysqldata/
+e2e-data/
+.e2e/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
