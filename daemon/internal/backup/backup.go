@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -52,7 +53,7 @@ func (m *Manager) BackupPath(base, serverUUID, backupUUID string) string {
 
 // Create archives the server data directory to base/<server>/<backup>.tar.gz.
 // Reports progress via onProgress (0-100) when non-nil.
-func (m *Manager) Create(base, serverUUID, backupUUID, name, dataDir string) (Info, error) {
+func (m *Manager) Create(base, serverUUID, backupUUID, name, dataDir, ignore string) (Info, error) {
 	running.mu.Lock()
 	if _, busy := running.set[serverUUID]; busy {
 		running.mu.Unlock()
@@ -86,6 +87,13 @@ func (m *Manager) Create(base, serverUUID, backupUUID, name, dataDir string) (In
 	tw := tar.NewWriter(gz)
 
 	var total int64
+	ignoreSet := map[string]struct{}{}
+	for _, line := range strings.Split(ignore, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			ignoreSet[line] = struct{}{}
+		}
+	}
 	err = filepath.Walk(dataDir, func(p string, fi fs.FileInfo, werr error) error {
 		if werr != nil {
 			return nil
@@ -99,6 +107,12 @@ func (m *Manager) Create(base, serverUUID, backupUUID, name, dataDir string) (In
 			return nil
 		}
 		if rel == "." {
+			return nil
+		}
+		if _, skip := ignoreSet[rel]; skip {
+			if fi.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		hdr, herr := tar.FileInfoHeader(fi, "")

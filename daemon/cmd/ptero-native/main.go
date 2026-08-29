@@ -167,10 +167,10 @@ func syncServersFromPanel(pc *panel.Client, registry *server.Registry, log *util
 			log.Warn("server config decode failed: %v", err)
 			continue
 		}
-		if cfg.UUID == "" {
+		if cfg.UUID() == "" {
 			continue
 		}
-		if _, exists := registry.Get(cfg.UUID); !exists {
+		if _, exists := registry.Get(cfg.UUID()); !exists {
 			registry.Put(&cfg)
 		}
 	}

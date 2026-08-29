@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -25,9 +26,10 @@ func (a *App) handleServersList(w http.ResponseWriter, r *http.Request) {
 	for _, s := range all {
 		st := s.Snapshot()
 		data = append(data, serverSummary{
-			UUID:  st.Config.UUID,
-			Name:  st.Config.Name,
-			State: st.State,
+			UUID:        st.Config.UUID(),
+			Name:        st.Config.Name(),
+			Description: st.Config.Settings.Meta.Description,
+			State:       st.State,
 		})
 	}
 	util.WriteJSON(w, http.StatusOK, map[string]interface{}{
@@ -44,43 +46,60 @@ func (a *App) handleServersList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleServerCreate implements POST /api/servers.
+// handleServerCreate implements POST /api/servers (v1.15 pull model:
+// body {uuid, start_on_completion}; the daemon fetches config from the panel).
 func (a *App) handleServerCreate(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))
-	if err != nil {
-		util.WriteError(w, util.ErrBadRequest("read body: "+err.Error()))
-		return
+	var body struct {
+		UUID              string `json:"uuid"`
+		StartOnCompletion bool   `json:"start_on_completion"`
 	}
-	var cfg server.ServerConfig
-	if err := json.Unmarshal(body, &cfg); err != nil {
-		util.WriteError(w, util.ErrBadRequest("invalid server configuration: "+err.Error()))
-		return
-	}
-	if cfg.UUID == "" {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || body.UUID == "" {
 		util.WriteError(w, util.ErrBadRequest("missing server uuid"))
 		return
 	}
-	if cfg.Settings.UUID == "" {
-		cfg.Settings.UUID = cfg.UUID
+	cfg, err := a.fetchAndBuildConfig(body.UUID)
+	if err != nil {
+		util.WriteError(w, util.ErrInternal("fetch server config: "+err.Error()))
+		return
 	}
-
-	// resolve runtime mapping now and store it in the config
-	a.resolveRuntime(&cfg)
-
-	if cfg.Settings.Environment == nil {
-		cfg.Settings.Environment = map[string]string{}
+	s := a.Registry.Put(cfg)
+	if s == nil {
+		util.WriteError(w, util.ErrInternal("register server"))
+		return
 	}
-
-	s := a.Registry.Put(&cfg)
 	s.ChownVolume()
+	a.Log.Info("server %s created (image=%q profile=%s start_on_completion=%v)", cfg.UUID(), cfg.Image(), cfg.ResolvedProfile, body.StartOnCompletion)
 
-	a.Log.Info("server %s created (image=%q runtime=%s profile=%s)", cfg.UUID, cfg.Image(), cfg.Settings.Runtime, cfg.ResolvedProfile)
+	// v1.15 parity: run install automatically when the server was never installed,
+	// then optionally start on completion.
+	go a.TriggerInstall(body.UUID, false, body.StartOnCompletion)
 	util.WriteJSON(w, http.StatusNoContent, nil)
+}
+
+// fetchAndBuildConfig pulls the server detail from the panel and resolves runtime.
+func (a *App) fetchAndBuildConfig(uuid string) (*server.ServerConfig, error) {
+	raw, err := a.Panel.GetServer(uuid)
+	if err != nil {
+		return nil, err
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	var cfg server.ServerConfig
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return nil, err
+	}
+	if cfg.Settings.UUID == "" {
+		cfg.Settings.UUID = uuid
+	}
+	// resolve runtime mapping now and store it
+	a.resolveRuntime(&cfg)
+	return &cfg, nil
 }
 
 // resolveRuntime fills cfg.ResolvedProfile/Path/Env from settings.runtime or the image.
 func (a *App) resolveRuntime(cfg *server.ServerConfig) {
-	// explicit runtime key from panel patch wins
 	if cfg.Settings.Runtime != "" {
 		profile, path := splitRuntimeKey(cfg.Settings.Runtime)
 		cfg.ResolvedProfile = profile
@@ -110,6 +129,23 @@ func splitRuntimeKey(key string) (string, string) {
 	return key, ""
 }
 
+// handleServerSync implements POST /api/servers/{uuid}/sync (panel config refresh).
+func (a *App) handleServerSync(w http.ResponseWriter, r *http.Request) {
+	s, err := a.getServer(r)
+	if err != nil {
+		util.WriteError(w, err)
+		return
+	}
+	cfg, err := a.fetchAndBuildConfig(s.UUID())
+	if err != nil {
+		util.WriteError(w, util.ErrInternal("sync: "+err.Error()))
+		return
+	}
+	a.Registry.Put(cfg)
+	a.Log.Info("server %s synced from panel", s.UUID())
+	util.WriteJSON(w, http.StatusNoContent, nil)
+}
+
 // handleServerGet implements GET /api/servers/{uuid}.
 func (a *App) handleServerGet(w http.ResponseWriter, r *http.Request) {
 	s, err := a.getServer(r)
@@ -120,103 +156,25 @@ func (a *App) handleServerGet(w http.ResponseWriter, r *http.Request) {
 	st := s.Snapshot()
 	c := st.Config
 	util.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"settings": c.Settings,
-		"build":    c.Build,
-		"allocations": c.Allocations,
+		"settings":              c.Settings,
+		"process_configuration": c.ProcessConfiguration,
 	})
 }
 
-// handleServerUpdate implements PATCH /api/servers/{uuid}.
+// handleServerUpdate implements PATCH /api/servers/{uuid} (config refresh from panel).
 func (a *App) handleServerUpdate(w http.ResponseWriter, r *http.Request) {
 	s, err := a.getServer(r)
 	if err != nil {
 		util.WriteError(w, err)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))
+	cfg, err := a.fetchAndBuildConfig(s.UUID())
 	if err != nil {
-		util.WriteError(w, util.ErrBadRequest("read body"))
+		util.WriteError(w, util.ErrInternal("refresh config: "+err.Error()))
 		return
 	}
-	var patch map[string]json.RawMessage
-	if err := json.Unmarshal(body, &patch); err != nil {
-		util.WriteError(w, util.ErrBadRequest("invalid patch: "+err.Error()))
-		return
-	}
-	a.patchServer(s, patch)
+	a.Registry.Put(cfg)
 	util.WriteJSON(w, http.StatusNoContent, nil)
-}
-
-// patchServer applies partial config updates.
-func (a *App) patchServer(s *server.Server, patch map[string]json.RawMessage) {
-	s.LockConfig()
-	defer s.UnlockConfig()
-	c := s.Cfg
-	if raw, ok := patch["build"]; ok {
-		var bm map[string]interface{}
-		if json.Unmarshal(raw, &bm) == nil {
-			if v, ok := bm["memory_limit"].(float64); ok {
-				c.Build.MemoryLimit = int64(v)
-			}
-			if v, ok := bm["swap"].(float64); ok {
-				c.Build.Swap = int64(v)
-			}
-			if v, ok := bm["io_weight"].(float64); ok {
-				c.Build.IoWeight = int64(v)
-			}
-			if v, ok := bm["cpu_limit"].(float64); ok {
-				c.Build.CpuLimit = int64(v)
-			}
-			if v, ok := bm["disk_space"].(float64); ok {
-				c.Build.DiskSpace = int64(v)
-			}
-			if v, ok := bm["oom_disabled"].(bool); ok {
-				c.Build.OomDisabled = v
-			}
-		}
-	}
-	if raw, ok := patch["allocations"]; ok {
-		var al server.Allocations
-		if json.Unmarshal(raw, &al) == nil {
-			c.Allocations = al
-		}
-	}
-	if raw, ok := patch["settings"]; ok {
-		var st server.Settings
-		if json.Unmarshal(raw, &st) == nil {
-			if st.Image != "" {
-				c.Settings.Image = st.Image
-			}
-			if st.Runtime != "" {
-				c.Settings.Runtime = st.Runtime
-			}
-			if st.Stopped != c.Settings.Stopped && st.Stopped {
-				c.Settings.Stopped = st.Stopped
-			}
-		}
-	}
-	if raw, ok := patch["invocation"]; ok {
-		var inv string
-		if json.Unmarshal(raw, &inv) == nil && inv != "" {
-			c.Invocation = inv
-		}
-	}
-	if raw, ok := patch["container"]; ok {
-		var ct server.Container
-		if json.Unmarshal(raw, &ct) == nil {
-			if ct.Image != "" {
-				c.Container.Image = ct.Image
-			}
-			if ct.StartupCommand != "" {
-				c.Container.StartupCommand = ct.StartupCommand
-			}
-			if ct.StopCommand != "" {
-				c.Container.StopCommand = ct.StopCommand
-			}
-		}
-	}
-	a.resolveRuntime(c)
-	_ = s.Persist()
 }
 
 // handleServerDelete implements DELETE /api/servers/{uuid}.
@@ -236,7 +194,6 @@ func (a *App) handleServerDelete(w http.ResponseWriter, r *http.Request) {
 		_ = s.Kill()
 	}
 	uuid := s.UUID()
-	// best-effort wait for exit
 	for i := 0; i < 40; i++ {
 		if s.State() == server.StateOffline || s.State() == server.StateCrashed {
 			break
@@ -248,7 +205,7 @@ func (a *App) handleServerDelete(w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, http.StatusNoContent, nil)
 }
 
-// handleServerInstall implements PATCH /api/servers/{uuid}/install (panel-triggered install).
+// handleServerInstall implements PATCH /api/servers/{uuid}/install (explicit install trigger).
 func (a *App) handleServerInstall(w http.ResponseWriter, r *http.Request) {
 	s, err := a.getServer(r)
 	if err != nil {
@@ -259,7 +216,7 @@ func (a *App) handleServerInstall(w http.ResponseWriter, r *http.Request) {
 		Reinstall bool `json:"reinstall"`
 	}
 	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body)
-	a.TriggerInstall(s.UUID(), body.Reinstall)
+	go a.TriggerInstall(s.UUID(), body.Reinstall, false)
 	util.WriteJSON(w, http.StatusNoContent, nil)
 }
 
@@ -270,8 +227,18 @@ func (a *App) handleServerReinstall(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, err)
 		return
 	}
-	a.TriggerInstall(s.UUID(), true)
+	go a.TriggerInstall(s.UUID(), true, false)
 	util.WriteJSON(w, http.StatusAccepted, nil)
+}
+
+// handleServerArchive implements POST /api/servers/{uuid}/archive (native: no-op 202,
+// transfers/archives are not supported — documented limitation).
+func (a *App) handleServerArchive(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.getServer(r); err != nil {
+		util.WriteError(w, err)
+		return
+	}
+	util.WriteJSON(w, http.StatusAccepted, map[string]interface{}{"archived": false})
 }
 
 // handlePower implements POST /api/servers/{uuid}/power.
@@ -283,12 +250,13 @@ func (a *App) handlePower(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		State string `json:"state"`
+		Wait  bool   `json:"wait"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || body.State == "" {
 		util.WriteError(w, util.ErrBadRequest("missing power state"))
 		return
 	}
-	if s.Cfg.Suspended {
+	if s.Cfg.Settings.Suspended {
 		util.WriteError(w, util.ErrServerSuspended())
 		return
 	}
@@ -297,6 +265,23 @@ func (a *App) handlePower(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.Log.Info("server %s power action: %s", s.UUID(), body.State)
+
+	if body.Wait {
+		// wait up to 20s for the action to take effect
+		target := map[string]string{
+			"start": server.StateRunning, "stop": server.StateOffline,
+			"kill": server.StateOffline,
+		}[body.State]
+		if target != "" {
+			deadline := time.Now().Add(20 * time.Second)
+			for time.Now().Before(deadline) {
+				if s.State() == target {
+					break
+				}
+				time.Sleep(250 * time.Millisecond)
+			}
+		}
+	}
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -349,3 +334,5 @@ func (a *App) handleLogs(w http.ResponseWriter, r *http.Request) {
 		"meta": map[string]interface{}{},
 	})
 }
+
+var _ = fmt.Sprintf

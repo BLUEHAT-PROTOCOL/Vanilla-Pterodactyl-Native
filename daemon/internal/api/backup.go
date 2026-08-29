@@ -94,6 +94,7 @@ func (a *App) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 		Adapter string `json:"adapter"`
 		UUID    string `json:"uuid"`
 		Name    string `json:"name"`
+		Ignore  string `json:"ignore"`
 	}
 	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body)
 	if body.UUID == "" {
@@ -105,14 +106,14 @@ func (a *App) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 
 	serverUUID := s.UUID()
 	go func() {
-		info, err := a.backups().Create(a.BackupPath, serverUUID, body.UUID, body.Name, s.DataDir())
+		info, err := a.backups().Create(a.BackupPath, serverUUID, body.UUID, body.Name, s.DataDir(), body.Ignore)
 		if err != nil {
 			a.Log.Error("backup %s failed: %v", body.UUID, err)
-			_ = a.Panel.BackupCompleted(serverUUID, body.UUID, false, "", "sha256", 0)
+			_ = a.Panel.ReportBackup(body.UUID, false, "", "sha256", 0)
 			return
 		}
 		a.Log.Info("backup %s created (%d bytes, sha256=%s)", body.UUID, info.Size, info.Checksum[:12])
-		if err := a.Panel.BackupCompleted(serverUUID, body.UUID, true, info.Checksum, "sha256", info.Size); err != nil {
+		if err := a.Panel.ReportBackup(body.UUID, true, info.Checksum, "sha256", info.Size); err != nil {
 			a.Log.Warn("backup completion callback failed: %v", err)
 		}
 	}()
@@ -133,10 +134,7 @@ func (a *App) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, util.ErrNotFound("backup"))
 		return
 	}
-	secret := s.Cfg.JWTSecret
-	if secret == "" {
-		secret = a.Cfg.Daemon.Token
-	}
+	secret := a.Cfg.Daemon.Token
 	tok, err := signToken(secret, map[string]interface{}{
 		"sub":       "backup-download",
 		"unique_id": newID(),
@@ -182,7 +180,9 @@ func (a *App) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	bid := r.PathValue("backup")
 	var body struct {
+		Adapter            string `json:"adapter"`
 		TruncateDirectory bool `json:"truncate_directory"`
+		DownloadURL        string `json:"download_url"`
 	}
 	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body)
 
@@ -211,12 +211,12 @@ func (a *App) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := a.backups().Restore(a.BackupPath, serverUUID, bid, s.DataDir(), body.TruncateDirectory); err != nil {
 			a.Log.Error("restore %s failed: %v", bid, err)
-			_ = a.Panel.RestoreCompleted(serverUUID, bid, false, err.Error())
+			_ = a.Panel.ReportRestore(bid, false, err.Error())
 			return
 		}
 		_ = b
 		a.Log.Info("restore %s completed", bid)
-		_ = a.Panel.RestoreCompleted(serverUUID, bid, true, "")
+		_ = a.Panel.ReportRestore(bid, true, "")
 		s.PushConsole("[ptero-native] backup restored successfully")
 	}()
 

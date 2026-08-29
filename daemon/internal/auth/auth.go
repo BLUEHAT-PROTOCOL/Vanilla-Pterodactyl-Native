@@ -43,6 +43,7 @@ func CheckBearer(r *http.Request, keys map[string]string) bool {
 type JWTClaims struct {
 	Sub       string                 `json:"sub"`
 	UniqueID  string                 `json:"unique_id"`
+	ServerUUID string                `json:"server_uuid,omitempty"`
 	Owner     string                 `json:"owner,omitempty"`
 	Servers   map[string]interface{} `json:"servers,omitempty"`
 	Exp       int64                  `json:"exp"`

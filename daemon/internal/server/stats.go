@@ -44,9 +44,9 @@ type procCPUSample struct {
 func (s *Server) CollectStats(q Quota) *Stats {
 	s.mu.RLock()
 	pid := s.pid
-	memLimit := s.Cfg.Build.MemoryLimit * 1024 * 1024
-	cpuLimit := s.Cfg.Build.CpuLimit
-	diskLimit := s.Cfg.Build.DiskSpace * 1024 * 1024
+	memLimit := s.Cfg.Settings.Build.MemoryLimit * 1024 * 1024
+	cpuLimit := s.Cfg.Settings.Build.CpuLimit
+	diskLimit := s.Cfg.Settings.Build.DiskSpace * 1024 * 1024
 	s.mu.RUnlock()
 
 	if pid == 0 {

@@ -32,7 +32,8 @@ type installTracker struct {
 var installs = &installTracker{jobs: map[string]*installJob{}}
 
 // TriggerInstall fetches the egg install script from the panel and runs it natively.
-func (a *App) TriggerInstall(uuid string, reinstall bool) {
+// When startOnCompletion is true the server is started after a successful install.
+func (a *App) TriggerInstall(uuid string, reinstall bool, startOnCompletion bool) {
 	s, ok := a.Registry.Get(uuid)
 	if !ok {
 		return
@@ -55,12 +56,12 @@ func (a *App) TriggerInstall(uuid string, reinstall bool) {
 			job.running = false
 			installs.mu.Unlock()
 		}()
-		a.runInstall(ctx, s, job, reinstall)
+		a.runInstall(ctx, s, job, reinstall, startOnCompletion)
 	}()
 }
 
 // runInstall executes the egg install script natively and reports to the panel.
-func (a *App) runInstall(ctx context.Context, s *server.Server, job *installJob, reinstall bool) {
+func (a *App) runInstall(ctx context.Context, s *server.Server, job *installJob, reinstall bool, startOnCompletion bool) {
 	uuid := s.UUID()
 	s.SetInstalled(0)
 	st := s.Snapshot()
@@ -86,10 +87,6 @@ func (a *App) runInstall(ctx context.Context, s *server.Server, job *installJob,
 	}
 
 	script := jsonStr(def, "script")
-	entry := jsonStr(def, "entry")
-	container := jsonStr(def, "container")
-	copyScript := jsonBool(def, "copy_script_on")
-	_ = copyScript
 
 	if script == "" {
 		// no install script: mark success immediately
@@ -97,14 +94,12 @@ func (a *App) runInstall(ctx context.Context, s *server.Server, job *installJob,
 		s.SetState(server.StateOffline)
 		a.emitInstallStatus(uuid, "done")
 		a.emitInstallOutput(uuid, "[ptero-native] no install script; skipping")
-		if err := a.Panel.InstallSuccess(uuid); err != nil {
+		if err := a.Panel.ReportInstall(uuid, true, false); err != nil {
 			a.Log.Warn("install success callback failed for %s: %v", uuid, err)
 		}
 		return
 	}
 
-	_ = entry
-	_ = container
 
 	vol := a.Cfg.ServerVolume(uuid)
 	_ = os.MkdirAll(vol, 0o755)
@@ -204,7 +199,7 @@ selectLoop:
 	a.emitInstallStatus(uuid, "done")
 	a.emitInstallOutput(uuid, "[ptero-native] install completed successfully")
 	s.PushConsole("[ptero-native] install completed successfully")
-	if err := a.Panel.InstallSuccess(uuid); err != nil {
+	if err := a.Panel.ReportInstall(uuid, true, false); err != nil {
 		a.Log.Warn("install success callback failed for %s: %v", uuid, err)
 	}
 }
@@ -218,7 +213,7 @@ func (a *App) failInstall(s *server.Server, job *installJob, msg string) {
 	a.emitInstallOutput(uuid, "[ptero-native] "+msg)
 	s.PushConsole("[ptero-native] install failed: " + msg)
 	a.Log.Error("install %s failed: %s", uuid, msg)
-	if err := a.Panel.InstallFailed(uuid, msg); err != nil {
+	if err := a.Panel.ReportInstall(uuid, false, false); err != nil {
 		a.Log.Warn("install failed callback failed for %s: %v", uuid, err)
 	}
 }

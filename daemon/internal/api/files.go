@@ -243,12 +243,6 @@ func (a *App) handleFilesUncompress(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, util.ErrBadRequest("missing file"))
 		return
 	}
-	full, ferr := files.SafePath(s.DataDir(), filepath.Join(body.Root, body.File))
-	if ferr != nil {
-		util.WriteError(w, filesErr(ferr))
-		return
-	}
-	_ = full
 	if err := files.Uncompress(s.DataDir(), filepath.Join(body.Root, body.File)); err != nil {
 		util.WriteError(w, filesErr(err))
 		return
@@ -512,22 +506,18 @@ func (a *App) handleUploadTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := map[string]interface{}{
-		"sub":       "upload",
-		"unique_id": newID(),
-		"server":    uuid,
-		"exp":       time.Now().Add(10 * time.Minute).Unix(),
+		"sub":         "upload",
+		"unique_id":   newID(),
+		"server_uuid": uuid,
+		"server":      uuid,
+		"exp":         time.Now().Add(15 * time.Minute).Unix(),
 	}
-	// sign with daemon-level secret: use the server jwt secret
-	s, ok := a.Registry.Get(uuid)
-	if !ok {
+	// verify the server exists (upload target)
+	if _, ok := a.Registry.Get(uuid); !ok {
 		util.WriteError(w, util.ErrNotFound("server"))
 		return
 	}
-	secret := s.Cfg.JWTSecret
-	if secret == "" {
-		secret = a.Cfg.Daemon.Token // fallback
-	}
-	tok, err := signToken(secret, claims)
+	tok, err := signToken(a.Cfg.Daemon.Token, claims)
 	if err != nil {
 		util.WriteError(w, util.ErrInternal("sign token"))
 		return
@@ -556,10 +546,7 @@ func (a *App) handleUpload(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, util.ErrNotFound("server"))
 		return
 	}
-	secret := s.Cfg.JWTSecret
-	if secret == "" {
-		secret = a.Cfg.Daemon.Token
-	}
+	secret := a.Cfg.Daemon.Token
 	if _, err := verifyToken(token, secret); err != nil {
 		util.WriteJSON(w, http.StatusUnauthorized, map[string]interface{}{
 			"errors": []interface{}{util.NewErr(http.StatusUnauthorized, "UnauthorizedAccessException", "invalid upload token")},
@@ -639,23 +626,22 @@ func (a *App) handleSignedDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uuid, _ := claims["server_uuid"].(string)
+	if uuid == "" {
+		uuid, _ = claims["server"].(string)
+	}
 	filePath, _ := claims["file_path"].(string)
-	s, ok := a.Registry.Get(uuid)
+	srv, ok := a.Registry.Get(uuid)
 	if !ok {
 		util.WriteError(w, util.ErrNotFound("server"))
 		return
 	}
-	secret := s.Cfg.JWTSecret
-	if secret == "" {
-		secret = a.Cfg.Daemon.Token
-	}
-	if _, err := verifyToken(token, secret); err != nil {
+	if _, err := verifyToken(token, a.Cfg.Daemon.Token); err != nil {
 		util.WriteJSON(w, http.StatusUnauthorized, map[string]interface{}{
 			"errors": []interface{}{util.NewErr(http.StatusUnauthorized, "UnauthorizedAccessException", "invalid token")},
 		})
 		return
 	}
-	full, err := files.SafePath(s.DataDir(), filePath)
+	full, err := files.SafePath(srv.DataDir(), filePath)
 	if err != nil {
 		util.WriteError(w, filesErr(err))
 		return
@@ -687,16 +673,18 @@ func (a *App) handleSignedBackupDownload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	uuid, _ := claims["server"].(string)
+	if uuid == "" {
+		uuid, _ = claims["server_uuid"].(string)
+	}
 	backup, _ := claims["backup"].(string)
-	s, ok := a.Registry.Get(uuid)
-	if !ok {
+	if backup == "" {
+		backup, _ = claims["backup_uuid"].(string)
+	}
+	if _, ok := a.Registry.Get(uuid); !ok {
 		util.WriteError(w, util.ErrNotFound("server"))
 		return
 	}
-	secret := s.Cfg.JWTSecret
-	if secret == "" {
-		secret = a.Cfg.Daemon.Token
-	}
+	secret := a.Cfg.Daemon.Token
 	if _, err := verifyToken(token, secret); err != nil {
 		util.WriteJSON(w, http.StatusUnauthorized, map[string]interface{}{
 			"errors": []interface{}{util.NewErr(http.StatusUnauthorized, "UnauthorizedAccessException", "invalid token")},

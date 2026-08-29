@@ -96,12 +96,14 @@ func (a *App) Router() http.Handler {
 	mux.HandleFunc("POST /api/update", a.requireAuth(a.handleUpdatePost))
 	mux.HandleFunc("GET /api/verify-license", a.requireAuth(a.handleLicense))
 
-	// servers CRUD
+	// servers CRUD (v1.15 protocol)
 	mux.HandleFunc("GET /api/servers", a.requireAuth(a.handleServersList))
 	mux.HandleFunc("POST /api/servers", a.requireAuth(a.handleServerCreate))
 	mux.HandleFunc("GET /api/servers/{uuid}", a.requireAuth(a.handleServerGet))
 	mux.HandleFunc("PATCH /api/servers/{uuid}", a.requireAuth(a.handleServerUpdate))
 	mux.HandleFunc("DELETE /api/servers/{uuid}", a.requireAuth(a.handleServerDelete))
+	mux.HandleFunc("POST /api/servers/{uuid}/sync", a.requireAuth(a.handleServerSync))
+	mux.HandleFunc("POST /api/servers/{uuid}/archive", a.requireAuth(a.handleServerArchive))
 	mux.HandleFunc("PATCH /api/servers/{uuid}/install", a.requireAuth(a.handleServerInstall))
 	mux.HandleFunc("POST /api/servers/{uuid}/reinstall", a.requireAuth(a.handleServerReinstall))
 
@@ -111,7 +113,8 @@ func (a *App) Router() http.Handler {
 	mux.HandleFunc("GET /api/servers/{uuid}/logs", a.requireAuth(a.handleLogs))
 	mux.HandleFunc("GET /api/servers/{uuid}/ws", a.handleWSRoute)
 
-	// files
+	// files (v1.15 routes)
+	mux.HandleFunc("GET /api/servers/{uuid}/files/list-directory", a.requireAuth(a.handleFilesList))
 	mux.HandleFunc("GET /api/servers/{uuid}/files/list", a.requireAuth(a.handleFilesList))
 	mux.HandleFunc("GET /api/servers/{uuid}/files/contents", a.requireAuth(a.handleFilesContents))
 	mux.HandleFunc("POST /api/servers/{uuid}/files/write", a.requireAuth(a.handleFilesWrite))
@@ -120,6 +123,7 @@ func (a *App) Router() http.Handler {
 	mux.HandleFunc("POST /api/servers/{uuid}/files/create-directory", a.requireAuth(a.handleFilesMkdir))
 	mux.HandleFunc("POST /api/servers/{uuid}/files/delete", a.requireAuth(a.handleFilesDelete))
 	mux.HandleFunc("POST /api/servers/{uuid}/files/compress", a.requireAuth(a.handleFilesCompress))
+	mux.HandleFunc("POST /api/servers/{uuid}/files/decompress", a.requireAuth(a.handleFilesUncompress))
 	mux.HandleFunc("POST /api/servers/{uuid}/files/uncompress", a.requireAuth(a.handleFilesUncompress))
 	mux.HandleFunc("POST /api/servers/{uuid}/files/chmod", a.requireAuth(a.handleFilesChmod))
 	mux.HandleFunc("POST /api/servers/{uuid}/files/pull", a.requireAuth(a.handleFilesPull))
@@ -127,8 +131,15 @@ func (a *App) Router() http.Handler {
 	mux.HandleFunc("DELETE /api/servers/{uuid}/files/pull/{identifier}", a.requireAuth(a.handleFilesPullCancel))
 	mux.HandleFunc("GET /api/upload", a.requireAuth(a.handleUploadTicket))
 	mux.HandleFunc("POST /upload", a.handleUpload)
+	mux.HandleFunc("POST /upload/file", a.handleUpload)
 
-	// backups
+	// backups (v1.15 singular routes + legacy plural aliases)
+	mux.HandleFunc("GET /api/servers/{uuid}/backup", a.requireAuth(a.handleBackupsList))
+	mux.HandleFunc("POST /api/servers/{uuid}/backup", a.requireAuth(a.handleBackupCreate))
+	mux.HandleFunc("GET /api/servers/{uuid}/backup/{backup}", a.requireAuth(a.handleBackupGet))
+	mux.HandleFunc("GET /api/servers/{uuid}/backup/{backup}/download", a.requireAuth(a.handleBackupDownload))
+	mux.HandleFunc("DELETE /api/servers/{uuid}/backup/{backup}", a.requireAuth(a.handleBackupDelete))
+	mux.HandleFunc("POST /api/servers/{uuid}/backup/{backup}/restore", a.requireAuth(a.handleBackupRestore))
 	mux.HandleFunc("GET /api/servers/{uuid}/backups", a.requireAuth(a.handleBackupsList))
 	mux.HandleFunc("POST /api/servers/{uuid}/backups", a.requireAuth(a.handleBackupCreate))
 	mux.HandleFunc("GET /api/servers/{uuid}/backups/{backup}", a.requireAuth(a.handleBackupGet))
@@ -136,8 +147,9 @@ func (a *App) Router() http.Handler {
 	mux.HandleFunc("DELETE /api/servers/{uuid}/backups/{backup}", a.requireAuth(a.handleBackupDelete))
 	mux.HandleFunc("POST /api/servers/{uuid}/backups/{backup}/restore", a.requireAuth(a.handleBackupRestore))
 
-	// signed downloads (file + backup)
+	// signed downloads (file + backup, v1.15 paths)
 	mux.HandleFunc("GET /download", a.handleSignedDownload)
+	mux.HandleFunc("GET /download/file", a.handleSignedDownload)
 	mux.HandleFunc("GET /download/backup", a.handleSignedBackupDownload)
 
 	// transfer stubs (respond politely; unsupported in native)

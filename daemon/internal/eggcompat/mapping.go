@@ -3,6 +3,7 @@
 package eggcompat
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,7 +21,6 @@ type Mapping struct {
 
 // Resolver maps docker image names to native runtimes.
 type Resolver struct {
-	// mappings sourced from daemon config + panel runtime_mappings sync
 	mappings map[string]Mapping
 }
 
@@ -30,19 +30,24 @@ func NewResolver(m map[string]Mapping) *Resolver {
 	for k, v := range m {
 		r.mappings[strings.ToLower(k)] = v
 	}
-	// built-in defaults for official yolks
+	r.loadDefaults()
+	return r
+}
+
+// loadDefaults seeds official yolks mappings.
+func (r *Resolver) loadDefaults() {
 	defaults := map[string]string{
-		"ghcr.io/pterodactyl/yolks:nodejs_18": "node20",
-		"ghcr.io/pterodactyl/yolks:nodejs_20": "node20",
-		"ghcr.io/pterodactyl/yolks:nodejs_22": "node22",
-		"ghcr.io/pterodactyl/yolks:python_3.11":  "python311",
-		"ghcr.io/pterodactyl/yolks:python_3.12":  "python312",
-		"ghcr.io/pterodactyl/yolks:java_17":      "java17",
-		"ghcr.io/pterodactyl/yolks:java_21":      "java21",
-		"ghcr.io/pterodactyl/yolks:java_22":      "java21",
-		"ghcr.io/pterodactyl/yolks:debian":       "static",
-		"ghcr.io/pterodactyl/yolks:ubuntu":       "static",
-		"ghcr.io/pterodactyl/yolks:alpine":       "static",
+		"ghcr.io/pterodactyl/yolks:nodejs_18":   "node20",
+		"ghcr.io/pterodactyl/yolks:nodejs_20":   "node20",
+		"ghcr.io/pterodactyl/yolks:nodejs_22":   "node22",
+		"ghcr.io/pterodactyl/yolks:python_3.11": "python311",
+		"ghcr.io/pterodactyl/yolks:python_3.12": "python312",
+		"ghcr.io/pterodactyl/yolks:java_17":     "java17",
+		"ghcr.io/pterodactyl/yolks:java_21":     "java21",
+		"ghcr.io/pterodactyl/yolks:java_22":     "java21",
+		"ghcr.io/pterodactyl/yolks:debian":      "static",
+		"ghcr.io/pterodactyl/yolks:ubuntu":      "static",
+		"ghcr.io/pterodactyl/yolks:alpine":      "static",
 	}
 	binFor := map[string]string{
 		"node20":    "/opt/runtimes/node20/bin",
@@ -66,21 +71,19 @@ func NewResolver(m map[string]Mapping) *Resolver {
 		"java17": "17", "java21": "21",
 		"static": "", "custom": "",
 	}
-	for image, profile := range defaults {
+	for image, slug := range defaults {
 		key := strings.ToLower(image)
 		if _, ok := r.mappings[key]; !ok {
 			r.mappings[key] = Mapping{
-				Profile: profileOf[profile],
-				Version: versionOf[profile],
-				Path:    binFor[profile],
+				Profile: profileOf[slug],
+				Version: versionOf[slug],
+				Path:    binFor[slug],
 			}
 		}
 	}
-	return r
 }
 
-// Resolve maps an image to a runtime mapping (image matched case-insensitively,
-// tag-normalized: docker.io/library prefixes stripped).
+// Resolve maps an image to a runtime mapping (case-insensitive, tag-normalized).
 func (r *Resolver) Resolve(image string) (*Mapping, error) {
 	key := NormalizeImage(image)
 	if m, ok := r.mappings[key]; ok {
@@ -108,8 +111,7 @@ func (r *Resolver) SetMapping(image string, m Mapping) {
 // varNameRe validates {{VAR}} placeholders.
 var varNameRe = regexp.MustCompile(`^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
 
-// TranslateStartup converts a docker-style startup into a native bash command:
-// {{VAR}} -> ${VAR}, /home/container and /mnt/server -> data dir.
+// TranslateStartup converts a docker-style startup into a native bash command.
 func TranslateStartup(startup, dataDir string) string {
 	s := startup
 	s = TranslateDockerPaths(s, dataDir)
@@ -130,10 +132,6 @@ func TranslateStartup(startup, dataDir string) string {
 
 // TranslateDockerPaths rewrites known docker container paths to the data dir.
 func TranslateDockerPaths(s, dataDir string) string {
-	repl := func(p string) string {
-		return p
-	}
-	_ = repl
 	out := strings.ReplaceAll(s, "/home/container", dataDir)
 	out = strings.ReplaceAll(out, "/mnt/server", dataDir)
 	out = strings.ReplaceAll(out, "~/", dataDir+"/")
@@ -148,8 +146,7 @@ func SanitizeDataDir(dir string) error {
 	return os.MkdirAll(dir, 0o755)
 }
 
-// DetectProfileFromInvocation guesses a runtime profile from the startup line
-// (used when no image mapping exists).
+// DetectProfileFromInvocation guesses a runtime profile from the startup line.
 func DetectProfileFromInvocation(startup string) string {
 	fields := strings.Fields(strings.TrimSpace(startup))
 	if len(fields) == 0 {
@@ -160,11 +157,87 @@ func DetectProfileFromInvocation(startup string) string {
 		return "node"
 	case "python", "python3", "python3.11", "python3.12", "pip", "uvicorn", "gunicorn":
 		return "python"
-	case "java", "java17", "java21":
+	case "java":
 		return "java"
-	case "busybox", "httpd", "nginx", "caddy", "python-server":
+	case "busybox", "httpd", "nginx", "caddy":
 		return "static"
 	default:
 		return "custom"
+	}
+}
+
+// --- egg config file processing (find/replace) ---
+
+// ApplyConfigFile processes one egg config entry against the data dir.
+// It supports the same parser semantics as Wings: properties, yaml, file (plain), json.
+func ApplyConfigFile(dataDir string, file string, replaces []interface{}, find map[string]interface{}) error {
+	if file == "" {
+		return fmt.Errorf("config file path empty")
+	}
+	// translate docker path prefixes in the file path itself
+	f := strings.ReplaceAll(file, "/home/container", dataDir)
+	f = strings.ReplaceAll(f, "/mnt/server", dataDir)
+	f = strings.TrimPrefix(f, dataDir+"/")
+	target := filepath.Join(dataDir, filepath.FromSlash(f))
+
+	if _, err := os.Stat(target); err != nil {
+		return nil // nothing to process
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return err
+	}
+	content := string(data)
+
+	for _, rep := range replaces {
+		m, ok := rep.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		match, _ := m["match"].(string)
+		replaceWith, _ := m["replace_with"].(string)
+		ifValue, _ := m["if_value"].(string)
+		if match == "" {
+			continue
+		}
+		match = strings.ReplaceAll(match, "/home/container", dataDir)
+		replaceWith = strings.ReplaceAll(replaceWith, "/home/container", dataDir)
+		if ifValue != "" && !strings.Contains(content, ifValue) {
+			continue
+		}
+		content = strings.ReplaceAll(content, match, replaceWith)
+	}
+
+	// legacy "find" map: key -> value(s) literal replacement
+	for k, v := range find {
+		val := literal(v)
+		if k == "" {
+			continue
+		}
+		content = strings.ReplaceAll(content, k, val)
+	}
+
+	return os.WriteFile(target, []byte(content), 0o644)
+}
+
+func literal(v interface{}) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	case float64:
+		if t == float64(int64(t)) {
+			return fmt.Sprintf("%d", int64(t))
+		}
+		return fmt.Sprintf("%g", t)
+	case nil:
+		return ""
+	default:
+		b, _ := json.Marshal(v)
+		return string(b)
 	}
 }

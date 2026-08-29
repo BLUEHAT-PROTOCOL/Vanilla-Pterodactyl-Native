@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"ptero-native/internal/eggcompat"
 	"ptero-native/internal/util"
 )
 
@@ -25,29 +26,31 @@ func (s *Server) Start() error {
 		return util.NewErr(409, "ServerIsInstallingException", "cannot start server while installing")
 	}
 
-	// suspended check
-	if s.Cfg.Suspended {
+	if s.Cfg.Settings.Suspended {
 		return util.ErrServerSuspended()
 	}
 
-	vol := s.cfg.ServerVolume(s.Cfg.UUID)
+	vol := s.cfg.ServerVolume(s.Cfg.UUID())
 	if err := os.MkdirAll(vol, 0o755); err != nil {
 		return util.ErrInternal("prepare volume: " + err.Error())
 	}
 
-	invocation := s.Cfg.InvocationLine()
-	if invocation == "" {
+	raw := s.Cfg.InvocationLine()
+	if raw == "" {
 		return util.NewErr(400, "InvalidInvocationException", "no startup command configured for server")
 	}
 
-	// {{VAR}} -> ${VAR} so bash interpolates from environment
-	interpolated := translatePlaceholders(invocation)
+	// egg compat: apply process_configuration.configs (find/replace) before start
+	s.applyEggConfigs(vol)
+
+	// egg compat: translate docker paths + {{VAR}} -> ${VAR}
+	interpolated := translatePlaceholders(eggPathTranslate(raw, vol))
 
 	env := s.BuildEnv()
 
 	uid, gid := s.resolveRunUser()
 	if s.log != nil {
-		s.log.Info("server %s start: uid=%d gid=%d cmd=%q", s.Cfg.UUID, uid, gid, interpolated)
+		s.log.Info("server %s start: uid=%d gid=%d cmd=%q", s.Cfg.UUID(), uid, gid, interpolated)
 	}
 
 	cmd := exec.Command("bash", "-c", interpolated)
@@ -58,7 +61,6 @@ func (s *Server) Start() error {
 		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}
 	}
 
-	// stdout/err -> ring + hub
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return util.ErrInternal("stdout pipe: " + err.Error())
@@ -78,24 +80,51 @@ func (s *Server) Start() error {
 	}
 
 	s.cmd = cmd
+	s.stdinPipe = stdin
 	s.pid = cmd.Process.Pid
 	s.startedAt = time.Now()
 	s.stopFlag = false
 	s.killFlag = false
 	s.setStateLocked(StateStarting)
 
-	// stdin writer
-	s.stdinPipe = stdin
-
-	// output pumps
-	go s.pumpOutput(stdout, false)
-	go s.pumpOutput(stderr, true)
-
-	// supervisor
+	go s.pumpOutput(stdout)
+	go s.pumpOutput(stderr)
 	go s.supervise(cmd)
 
 	_ = s.persistState()
 	return nil
+}
+
+// applyEggConfigs processes egg config find/replace entries (wings parity).
+func (s *Server) applyEggConfigs(vol string) {
+	if s.Cfg.Settings.SkipEggScripts || len(s.Cfg.ProcessConfiguration.Configs) == 0 {
+		return
+	}
+	for file, cf := range s.Cfg.ProcessConfiguration.Configs {
+		if cf.File == "" {
+			cf.File = file
+		}
+		replaces := make([]interface{}, 0, len(cf.Replace))
+		for _, r := range cf.Replace {
+			replaces = append(replaces, map[string]interface{}{
+				"match":        r.Match,
+				"if_value":     r.IfValue,
+				"replace_with": r.ReplaceWith,
+			})
+		}
+		if err := eggcompat.ApplyConfigFile(vol, cf.File, replaces, cf.Find); err != nil {
+			if s.log != nil {
+				s.log.Warn("egg config %s: %v", cf.File, err)
+			}
+		}
+	}
+}
+
+// eggPathTranslate rewrites docker paths to the native data dir.
+func eggPathTranslate(s, dataDir string) string {
+	out := strings.ReplaceAll(s, "/home/container", dataDir)
+	out = strings.ReplaceAll(out, "/mnt/server", dataDir)
+	return out
 }
 
 // translatePlaceholders converts {{VAR}} placeholders to ${VAR}.
@@ -130,42 +159,39 @@ func isValidVarName(s string) bool {
 	return true
 }
 
-// BuildEnv assembles the process environment (panel env + built-ins + runtime path).
+// BuildEnv assembles the process environment.
 func (s *Server) BuildEnv() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	envMap := s.Cfg.EnvStringMap()
 
-	// panel built-ins
-	def := s.Cfg.Allocations.Default
+	def := s.Cfg.Settings.Allocations.Default
 	envMap["SERVER_IP"] = def.IP
 	if def.IP == "" {
 		envMap["SERVER_IP"] = "0.0.0.0"
 	}
 	envMap["SERVER_PORT"] = strconv.Itoa(def.Port)
-	envMap["SERVER_MEMORY"] = strconv.FormatInt(s.Cfg.Build.MemoryLimit, 10)
-	envMap["SERVER_UUID"] = s.Cfg.UUID
-	if s.Cfg.Name != "" {
-		envMap["SERVER_NAME"] = s.Cfg.Name
+	envMap["SERVER_MEMORY"] = strconv.FormatInt(s.Cfg.Settings.Build.MemoryLimit, 10)
+	envMap["SERVER_UUID"] = s.Cfg.UUID()
+	if n := s.Cfg.Name(); n != "" {
+		envMap["SERVER_NAME"] = n
 	}
-	envMap["P_SERVER_UUID"] = s.Cfg.UUID
+	envMap["P_SERVER_UUID"] = s.Cfg.UUID()
 	envMap["P_SERVER_LOCATION"] = "native"
 	envMap["P_SERVER_ALLOCATION_LIMIT"] = strconv.Itoa(allocCount(s.Cfg))
-	envMap["HOME"] = s.cfg.ServerVolume(s.Cfg.UUID)
-	envMap["PWD"] = s.cfg.ServerVolume(s.Cfg.UUID)
+	envMap["HOME"] = s.cfg.ServerVolume(s.Cfg.UUID())
+	envMap["PWD"] = s.cfg.ServerVolume(s.Cfg.UUID())
 	envMap["TMPDIR"] = s.cfg.Daemon.TmpPath
 
-	// runtime PATH resolution
 	if s.Cfg.ResolvedPath != "" {
 		envMap["PATH"] = s.Cfg.ResolvedPath + ":" + envMap["PATH"]
 	}
 
-	// P_SERVER_HOST_*
 	envMap["P_SERVER_HOST_IP"] = envMap["SERVER_IP"]
 	envMap["P_SERVER_HOST_PORT"] = envMap["SERVER_PORT"]
 
-	// uppercase aliases for every variable (egg contract)
+	// uppercase aliases (egg contract)
 	upper := map[string]string{}
 	for k, v := range envMap {
 		upper[strings.ToUpper(k)] = v
@@ -186,7 +212,7 @@ func (s *Server) BuildEnv() []string {
 
 func allocCount(c *ServerConfig) int {
 	n := 0
-	for _, ports := range c.Allocations.Mappings {
+	for _, ports := range c.Settings.Allocations.Mappings {
 		n += len(ports)
 	}
 	if n == 0 {
@@ -198,17 +224,17 @@ func allocCount(c *ServerConfig) int {
 // resolveRunUser determines uid/gid for the process (per-server user when root).
 func (s *Server) resolveRunUser() (int, int) {
 	if os.Geteuid() != 0 {
-		return -1, -1 // unprivileged: run as daemon user
+		return -1, -1
 	}
-	u := lookupServerUser(s.cfg, s.Cfg.UUID)
+	u := lookupServerUser(s.cfg, s.Cfg.UUID())
 	if u == nil {
 		return -1, -1
 	}
 	return u.uid, u.gid
 }
 
-// pumpOutput reads a pipe into the ring buffer + hub.
-func (s *Server) pumpOutput(r interface{ Read([]byte) (int, error) }, isErr bool) {
+// pumpOutput reads a pipe into the ring buffer + hub, detecting done lines.
+func (s *Server) pumpOutput(r interface{ Read([]byte) (int, error) }) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 512*1024)
 	for sc.Scan() {
@@ -218,14 +244,29 @@ func (s *Server) pumpOutput(r interface{ Read([]byte) (int, error) }, isErr bool
 		ring := s.logs
 		hub := s.hub
 		state := s.state
+		doneLines := s.Cfg.ProcessConfiguration.Startup.Done
 		s.mu.RUnlock()
 		if ring != nil {
 			ring.Push(line)
 		}
 		if hub != nil {
-			_ = isErr
-			_ = state
-			hub.ConsoleLine(s.Cfg.UUID, line)
+			hub.ConsoleLine(s.Cfg.UUID(), line)
+		}
+		// done-line detection: starting -> running
+		if state == StateStarting && len(doneLines) > 0 {
+			for _, done := range doneLines {
+				if done != "" && strings.Contains(line, done) {
+					s.mu.Lock()
+					if s.state == StateStarting {
+						s.state = StateRunning
+						if s.hub != nil {
+							go s.hub.StatusChange(s.Cfg.UUID(), StateRunning)
+						}
+					}
+					s.mu.Unlock()
+					break
+				}
+			}
 		}
 	}
 }
@@ -240,33 +281,30 @@ func (s *Server) supervise(cmd *exec.Cmd) {
 	s.stopFlag = false
 	s.killFlag = false
 	exitErr := err
-	pid := s.pid
 	startTime := s.startedAt
 	s.pid = 0
 	s.cmd = nil
-
-	if s.state != StateStopping {
-		s.setStateLocked(StateOffline)
-	}
 	s.mu.Unlock()
-	_ = pid
 
 	_ = s.persistState()
 
 	if wasStopped || exitErr == nil {
 		s.mu.Lock()
-		s.setStateLocked(StateOffline)
+		if s.state != StateInstalling {
+			s.setStateLocked(StateOffline)
+		}
 		s.mu.Unlock()
 		return
 	}
 
-	// crash path
 	if ee, ok := exitErr.(*exec.ExitError); ok {
-		code := ee.ExitCode()
-		if code != 0 {
+		if code := ee.ExitCode(); code != 0 {
 			s.handleCrash(code, time.Since(startTime))
 			return
 		}
+		s.mu.Lock()
+		s.setStateLocked(StateOffline)
+		s.mu.Unlock()
 		return
 	}
 	s.handleCrash(-1, time.Since(startTime))
@@ -275,7 +313,7 @@ func (s *Server) supervise(cmd *exec.Cmd) {
 // handleCrash implements crash detection + restart budget.
 func (s *Server) handleCrash(exitCode int, uptime time.Duration) {
 	s.mu.Lock()
-	if s.state == StateStopping {
+	if s.state == StateStopping || s.state == StateInstalling {
 		s.mu.Unlock()
 		return
 	}
@@ -291,17 +329,16 @@ func (s *Server) handleCrash(exitCode int, uptime time.Duration) {
 	s.mu.Unlock()
 
 	if s.log != nil {
-		s.log.Warn("server %s crashed (exit=%d uptime=%s crashCount=%d/%d)", s.Cfg.UUID, exitCode, uptime, count, budget)
+		s.log.Warn("server %s crashed (exit=%d uptime=%s crashCount=%d/%d)", s.Cfg.UUID(), exitCode, uptime, count, budget)
 	}
 
 	if count > budget {
 		if s.log != nil {
-			s.log.Error("server %s entered crash-loop; giving up", s.Cfg.UUID)
+			s.log.Error("server %s entered crash-loop; giving up", s.Cfg.UUID())
 		}
 		return
 	}
 
-	// auto-restart after delay
 	go func() {
 		time.Sleep(5 * time.Second)
 		s.mu.RLock()
@@ -311,12 +348,12 @@ func (s *Server) handleCrash(exitCode int, uptime time.Duration) {
 			return
 		}
 		if err := s.Start(); err != nil && s.log != nil {
-			s.log.Error("auto-restart failed for %s: %v", s.Cfg.UUID, err)
+			s.log.Error("auto-restart failed for %s: %v", s.Cfg.UUID(), err)
 		}
 	}()
 }
 
-// Stop gracefully stops the server (SIGSTOP group -> SIGTERM -> SIGKILL).
+// Stop gracefully stops the server honoring the egg stop configuration.
 func (s *Server) Stop() error {
 	return s.stop(false)
 }
@@ -327,33 +364,48 @@ func (s *Server) Kill() error {
 }
 
 func (s *Server) stop(kill bool) error {
-	s.mu.Lock()
-	if s.state != StateRunning && s.state != StateStarting && s.state != StateCrashed && s.state != StateOffline {
-		if s.pid == 0 {
-			s.mu.Unlock()
-			return util.NewErr(409, "PowerActionConflict", "server is not running")
-		}
-	}
-	if s.pid == 0 {
-		s.mu.Unlock()
-		return util.NewErr(409, "PowerActionConflict", "server is not running")
-	}
+	s.mu.RLock()
 	pid := s.pid
 	state := s.state
+	stopCfg := s.Cfg.ProcessConfiguration.Stop
+	s.mu.RUnlock()
+
+	if pid == 0 {
+		if state == StateOffline || state == StateCrashed {
+			return util.NewErr(409, "PowerActionConflict", "server is not running")
+		}
+		return util.NewErr(409, "PowerActionConflict", "server is not running")
+	}
+
+	s.mu.Lock()
 	s.killFlag = kill
 	s.stopFlag = true
-	if state != StateOffline {
-		s.setStateLocked(StateStopping)
-	}
+	s.setStateLocked(StateStopping)
 	s.mu.Unlock()
 
 	if kill {
 		_ = signalGroup(pid, syscall.SIGKILL)
 		return nil
 	}
-	// wings-style: SIGSTOP group, SIGTERM, wait grace, SIGKILL
-	_ = signalGroup(pid, syscall.SIGSTOP)
-	_ = signalGroup(pid, syscall.SIGTERM)
+
+	// egg-defined stop: command -> stdin, signal -> signal
+	if stopCfg.Type == "command" && stopCfg.Value != "" {
+		s.mu.RLock()
+		pipe := s.stdinPipe
+		s.mu.RUnlock()
+		if pipe != nil {
+			_, _ = fmt.Fprintln(pipe, stopCfg.Value)
+		}
+	} else if stopCfg.Type == "signal" && stopCfg.Value != "" {
+		sig := parseSignal(stopCfg.Value)
+		if sig != 0 {
+			_ = signalGroup(pid, sig)
+		}
+	} else {
+		// default: wings-style SIGSTOP then SIGTERM
+		_ = signalGroup(pid, syscall.SIGSTOP)
+		_ = signalGroup(pid, syscall.SIGTERM)
+	}
 
 	go func() {
 		deadline := time.Now().Add(30 * time.Second)
@@ -374,11 +426,25 @@ func (s *Server) stop(kill bool) error {
 	return nil
 }
 
+// parseSignal maps a signal name to a syscall signal.
+func parseSignal(name string) syscall.Signal {
+	signals := map[string]syscall.Signal{
+		"SIGKILL": syscall.SIGKILL, "KILL": syscall.SIGKILL,
+		"SIGTERM": syscall.SIGTERM, "TERM": syscall.SIGTERM,
+		"SIGINT": syscall.SIGINT, "INT": syscall.SIGINT,
+		"SIGHUP": syscall.SIGHUP, "HUP": syscall.SIGHUP,
+		"SIGSTOP": syscall.SIGSTOP, "STOP": syscall.SIGSTOP,
+		"SIGQUIT": syscall.SIGQUIT, "QUIT": syscall.SIGQUIT,
+	}
+	if sig, ok := signals[strings.ToUpper(strings.TrimSpace(name))]; ok {
+		return sig
+	}
+	return 0
+}
+
 // signalGroup signals a whole process group.
 func signalGroup(pid int, sig syscall.Signal) error {
-	// negative pid targets the group (pgid == pid thanks to Setpgid)
 	if err := syscall.Kill(-pid, sig); err != nil {
-		// fall back to the single process
 		if err2 := syscall.Kill(pid, sig); err2 != nil {
 			return err
 		}
@@ -419,7 +485,7 @@ func (s *Server) ConsoleLines(n int) []string {
 	return r.Replay(n, true)
 }
 
-// PushConsole injects a daemon-side console line (e.g. install messages).
+// PushConsole injects a daemon-side console line.
 func (s *Server) PushConsole(line string) {
 	s.mu.RLock()
 	r := s.logs
@@ -429,7 +495,7 @@ func (s *Server) PushConsole(line string) {
 		r.Push(line)
 	}
 	if hub != nil {
-		hub.ConsoleLine(s.Cfg.UUID, line)
+		hub.ConsoleLine(s.Cfg.UUID(), line)
 	}
 }
 
@@ -441,11 +507,11 @@ func (s *Server) Power(state string) error {
 	case "stop":
 		return s.Stop()
 	case "restart":
+		st := s.State()
+		if st == StateOffline || st == StateCrashed {
+			return s.Start()
+		}
 		if err := s.Stop(); err != nil {
-			// not running -> just start
-			if s.State() == StateOffline || s.State() == StateCrashed {
-				return s.Start()
-			}
 			return err
 		}
 		go func() {
@@ -471,4 +537,4 @@ func (s *Server) Uptime() int64 {
 }
 
 // DataDir returns the server volume path.
-func (s *Server) DataDir() string { return s.cfg.ServerVolume(s.Cfg.UUID) }
+func (s *Server) DataDir() string { return s.cfg.ServerVolume(s.Cfg.UUID()) }

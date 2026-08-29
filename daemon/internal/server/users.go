@@ -69,7 +69,7 @@ func (s *Server) ChownVolume() {
 	if os.Geteuid() != 0 {
 		return
 	}
-	u := lookupServerUser(s.cfg, s.Cfg.UUID)
+	u := lookupServerUser(s.cfg, s.Cfg.UUID())
 	if u == nil {
 		return
 	}

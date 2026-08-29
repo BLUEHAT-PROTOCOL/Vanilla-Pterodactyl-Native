@@ -21,7 +21,7 @@ func (q *QuotaTracker) UsedBytes(s *Server) int64 {
 
 	var total int64
 	_ = walkSize(s.DataDir(), &total)
-	_ = walkSize(s.cfg.Daemon.BackupPath+"/"+s.Cfg.UUID, &total)
+	_ = walkSize(filepath.Join(s.cfg.Daemon.BackupPath, s.Cfg.UUID()), &total)
 
 	s.mu.Lock()
 	s.diskCacheBytes = total
@@ -32,7 +32,7 @@ func (q *QuotaTracker) UsedBytes(s *Server) int64 {
 
 // LimitBytes returns the disk limit for a server in bytes.
 func (q *QuotaTracker) LimitBytes(s *Server) int64 {
-	lim := s.Cfg.Build.DiskSpace
+	lim := s.Cfg.Settings.Build.DiskSpace
 	if lim <= 0 {
 		return 0 // unlimited
 	}

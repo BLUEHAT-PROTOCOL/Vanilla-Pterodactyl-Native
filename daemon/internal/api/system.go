@@ -11,8 +11,15 @@ import (
 
 // handleSystem implements GET /api/system (panel dashboard compatibility).
 func (a *App) handleSystem(w http.ResponseWriter, r *http.Request) {
+	rel := kernelRelease()
+	// Superset response: top-level keys satisfy the admin SystemInformationController,
+	// nested blocks keep wings-shape consumers happy. docker is null (native runtime).
 	util.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"version": a.Version,
+		"version":        a.Version,
+		"os":             "Linux",
+		"architecture":   runtime.GOARCH,
+		"kernel_version": rel,
+		"cpu_count":      runtime.NumCPU(),
 		"docker": map[string]interface{}{
 			"versions": nil,
 			"driver":   nil,
@@ -20,10 +27,10 @@ func (a *App) handleSystem(w http.ResponseWriter, r *http.Request) {
 		},
 		"system": map[string]interface{}{
 			"type":           "linux",
-			"release":        kernelRelease(),
+			"release":        rel,
 			"architecture":   runtime.GOARCH,
 			"cpu_count":      runtime.NumCPU(),
-			"kernel_version": kernelRelease(),
+			"kernel_version": rel,
 		},
 	})
 }

@@ -1,4 +1,4 @@
-// Package panel implements the daemon -> panel remote API client.
+// Package panel implements the daemon -> panel remote API client (panel v1.15 protocol).
 package panel
 
 import (
@@ -16,7 +16,7 @@ import (
 // Client calls the Panel /api/remote/* endpoints.
 type Client struct {
 	BaseURL  string
-	Token    string // full daemon token "<id>.<secret>"
+	Token    string // the node daemon token secret (also the JWT signing key)
 	HTTP     *http.Client
 	Insecure bool
 }
@@ -64,11 +64,7 @@ func (c *Client) do(method, path string, body io.Reader, out interface{}) error 
 	return nil
 }
 
-// ServerDetail is the full server configuration from the panel.
-// Reuse server.ServerConfig via a local alias to avoid import cycles.
-type ServerDetail = map[string]interface{}
-
-// GetServer fetches the server detail from the panel.
+// GetServer fetches the full server detail ({settings, process_configuration}).
 func (c *Client) GetServer(uuid string) (map[string]interface{}, error) {
 	var out map[string]interface{}
 	if err := c.do(http.MethodGet, "/api/remote/servers/"+uuid, nil, &out); err != nil {
@@ -77,62 +73,81 @@ func (c *Client) GetServer(uuid string) (map[string]interface{}, error) {
 	return out, nil
 }
 
-// GetServersBulk fetches multiple servers by internal panel ids.
-func (c *Client) GetServersBulk(ids []int64) ([]map[string]interface{}, error) {
-	var sb strings.Builder
-	sb.WriteString("/api/remote/servers?")
-	for i, id := range ids {
-		if i > 0 {
-			sb.WriteString("&")
+// AllServers lists all servers assigned to this node (paginated, follows meta).
+func (c *Client) AllServers() ([]map[string]interface{}, error) {
+	var all []map[string]interface{}
+	page := 1
+	for {
+		var out struct {
+			Data []map[string]interface{} `json:"data"`
+			Meta struct {
+				Pagination struct {
+					CurrentPage int `json:"current_page"`
+					TotalPages  int `json:"total_pages"`
+				} `json:"pagination"`
+			} `json:"meta"`
 		}
-		sb.WriteString(fmt.Sprintf("ids[]=%d", id))
+		path := fmt.Sprintf("/api/remote/servers?per_page=100&page=%d", page)
+		if err := c.do(http.MethodGet, path, nil, &out); err != nil {
+			return nil, err
+		}
+		all = append(all, out.Data...)
+		if out.Meta.Pagination.TotalPages <= page || len(out.Data) == 0 {
+			break
+		}
+		page++
 	}
-	var out []map[string]interface{}
-	if err := c.do(http.MethodGet, sb.String(), nil, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return all, nil
 }
 
-// InstallSuccess reports a successful install.
-func (c *Client) InstallSuccess(uuid string) error {
-	return c.do(http.MethodPost, "/api/remote/servers/"+uuid+"/install/success", strings.NewReader("{}"), nil)
-}
-
-// InstallFailed reports a failed install.
-func (c *Client) InstallFailed(uuid, message string) error {
-	b, _ := json.Marshal(map[string]string{"message": message})
-	return c.do(http.MethodPost, "/api/remote/servers/"+uuid+"/install/failed", strings.NewReader(string(b)), nil)
-}
-
-// BackupCompleted reports backup completion.
-func (c *Client) BackupCompleted(uuid, backup string, successful bool, checksum, checksumType string, size int64) error {
+// ReportInstall reports install completion (v1.15: single endpoint with successful flag).
+func (c *Client) ReportInstall(uuid string, successful bool, reinstall bool) error {
 	b, _ := json.Marshal(map[string]interface{}{
-		"successful":    successful,
-		"checksum":      checksum,
-		"checksum_type": checksumType,
-		"size":          size,
+		"successful": successful,
+		"reinstall":  reinstall,
 	})
-	return c.do(http.MethodPost, "/api/remote/servers/"+uuid+"/backups/"+backup, strings.NewReader(string(b)), nil)
+	return c.do(http.MethodPost, "/api/remote/servers/"+uuid+"/install", strings.NewReader(string(b)), nil)
 }
 
-// RestoreCompleted reports restore completion.
-func (c *Client) RestoreCompleted(uuid, backup string, successful bool, message string) error {
-	path := "/api/remote/servers/" + uuid + "/backups/" + backup + "/restores"
-	if successful {
-		return c.do(http.MethodPost, path, strings.NewReader(`{"successful":true}`), nil)
-	}
-	b, _ := json.Marshal(map[string]string{"message": message})
-	return c.do(http.MethodPost, path+"/failed", strings.NewReader(string(b)), nil)
-}
-
-// GetInstallScript fetches the install script for a server.
+// GetInstallScript fetches the egg install script ({container_image, entrypoint, script}).
 func (c *Client) GetInstallScript(uuid string) (map[string]interface{}, error) {
 	var out map[string]interface{}
 	if err := c.do(http.MethodGet, "/api/remote/servers/"+uuid+"/install", nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// ReportBackup reports backup completion (v1.15: POST /api/remote/backups/{backup}).
+func (c *Client) ReportBackup(backup string, successful bool, checksum, checksumType string, size int64) error {
+	b, _ := json.Marshal(map[string]interface{}{
+		"successful":    successful,
+		"checksum":      checksum,
+		"checksum_type": checksumType,
+		"size":          size,
+	})
+	return c.do(http.MethodPost, "/api/remote/backups/"+backup, strings.NewReader(string(b)), nil)
+}
+
+// ReportRestore reports restore completion (POST /api/remote/backups/{backup}/restore).
+func (c *Client) ReportRestore(backup string, successful bool, message string) error {
+	if successful {
+		b, _ := json.Marshal(map[string]interface{}{"successful": true})
+		return c.do(http.MethodPost, "/api/remote/backups/"+backup+"/restore", strings.NewReader(string(b)), nil)
+	}
+	b, _ := json.Marshal(map[string]interface{}{"successful": false, "error": message})
+	return c.do(http.MethodPost, "/api/remote/backups/"+backup+"/restore", strings.NewReader(string(b)), nil)
+}
+
+// GetRuntimeMappings fetches the native runtime mapping table from the panel fork.
+func (c *Client) GetRuntimeMappings() ([]map[string]interface{}, error) {
+	var out struct {
+		Data []map[string]interface{} `json:"data"`
+	}
+	if err := c.do(http.MethodGet, "/api/remote/runtime/mappings", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
 }
 
 // DownloadFromPanel fetches a panel-mediated download (egg install assets).
@@ -145,13 +160,7 @@ func (c *Client) DownloadFromPanel(token string) (*http.Response, error) {
 	return c.HTTP.Do(req)
 }
 
-// PostActivity posts activity events.
-func (c *Client) PostActivity(events []map[string]interface{}) error {
-	b, _ := json.Marshal(events)
-	return c.do(http.MethodPost, "/api/remote/servers/activity", strings.NewReader(string(b)), nil)
-}
-
-// RawGet performs a raw GET returning the response (caller closes body).
+// RawGet performs a raw GET (caller closes body).
 func (c *Client) RawGet(path string) (*http.Response, error) {
 	req, err := http.NewRequest(http.MethodGet, c.BaseURL+path, nil)
 	if err != nil {
@@ -160,42 +169,4 @@ func (c *Client) RawGet(path string) (*http.Response, error) {
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Accept", "application/json")
 	return c.HTTP.Do(req)
-}
-
-// AllServers fetches every server assigned to this node.
-// Tries the bulk endpoint first, then falls back to paginated discovery.
-func (c *Client) AllServers() ([]map[string]interface{}, error) {
-	var out []map[string]interface{}
-	// Attempt 1: node-wide sync endpoint present in panel (remote/servers with node filter
-	// is not public; wings uses ids[]= from its local list). We support the daemon-side
-	// convention: panel exposes GET /api/remote/servers/list?node_token=1 returning all.
-	err := c.doList("/api/remote/servers/list", &out)
-	if err == nil && out != nil {
-		return out, nil
-	}
-	// Attempt 2: paginated application-style remote listing (used by native fork patch)
-	err = c.doList("/api/remote/servers?page=1&per_page=1000", &out)
-	if err == nil {
-		return out, nil
-	}
-	return nil, err
-}
-
-func (c *Client) doList(path string, out *[]map[string]interface{}) error {
-	resp, err := c.RawGet(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("panel list %s: %d", path, resp.StatusCode)
-	}
-	var body struct {
-		Data []map[string]interface{} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return err
-	}
-	*out = body.Data
-	return nil
 }

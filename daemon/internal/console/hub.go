@@ -141,20 +141,21 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if s.Cfg.JWTSecret == "" {
-		util.WriteJSON(w, http.StatusUnauthorized, map[string]interface{}{
-			"errors": []interface{}{util.NewErr(http.StatusUnauthorized, "UnauthorizedAccessException", "server has no jwt secret; sync from panel")},
-		})
-		return
-	}
-	claims, err := auth.ParseJWT(token, s.Cfg.JWTSecret)
+	// v1.15: panel signs ws tokens with the node daemon token (node->getDecryptedKey()).
+	secret := a.Cfg.Daemon.Token
+	claims, err := auth.ParseJWT(token, secret)
 	if err != nil {
 		util.WriteJSON(w, http.StatusUnauthorized, map[string]interface{}{
 			"errors": []interface{}{util.NewErr(http.StatusUnauthorized, "UnauthorizedAccessException", "invalid websocket token: "+err.Error())},
 		})
 		return
 	}
-	if claims.Sub != uuid && claims.Sub != "" {
+	// v1.15 claim: server_uuid (fall back to sub)
+	claimServer := claims.ServerUUID
+	if claimServer == "" {
+		claimServer = claims.Sub
+	}
+	if claimServer != "" && claimServer != uuid {
 		util.WriteJSON(w, http.StatusForbidden, map[string]interface{}{
 			"errors": []interface{}{util.NewErr(http.StatusForbidden, "ForbiddenAccessException", "token does not match server")},
 		})
