@@ -298,12 +298,14 @@ curl -s -o /dev/null "${DAUTH[@]}" -X POST "$DAEMON_URL/api/servers/$SERVER_UUID
 check "files: copy" curl -s "${DAUTH[@]}" "$DAEMON_URL/api/servers/$SERVER_UUID/files/list-directory?directory=%2F" | grep -q 'package-renamed.copy.json'
 curl -s -o /dev/null "${DAUTH[@]}" -X POST "$DAEMON_URL/api/servers/$SERVER_UUID/files/chmod" \
   -H 'Content-Type: application/json' -d '{"root":"/","files":[{"file":"index.js","mode":"0755"}]}'
-check "files: chmod applied" bash -c "curl -s ${DAUTH[@]} \"$DAEMON_URL/api/servers/$SERVER_UUID/files/list-directory?directory=%2F\" | grep -q '0755'"
+CHMOD_LIST=$(curl -s "${DAUTH[@]}" "$DAEMON_URL/api/servers/$SERVER_UUID/files/list-directory?directory=%2F")
+check "files: chmod applied" bash -c "echo '$CHMOD_LIST' | grep -q '0755'"
 
 # compress + decompress
 curl -s -o /dev/null "${DAUTH[@]}" -X POST "$DAEMON_URL/api/servers/$SERVER_UUID/files/compress" \
   -H 'Content-Type: application/json' -d '{"root":"/","files":["index.js","logs"]}'
-check "files: compress creates archive" bash -c "curl -s \"${DAUTH[@]}\" \"$DAEMON_URL/api/servers/$SERVER_UUID/files/list-directory?directory=%2F\" | grep -q 'archive-.*tar.gz'"
+COMPRESS_LIST=$(curl -s "${DAUTH[@]}" "$DAEMON_URL/api/servers/$SERVER_UUID/files/list-directory?directory=%2F")
+check "files: compress creates archive" bash -c "echo '$COMPRESS_LIST' | grep -q 'archive-.*tar.gz'"
 ARCHIVE=$(curl -s "${DAUTH[@]}" "$DAEMON_URL/api/servers/$SERVER_UUID/files/list-directory?directory=%2F" | python3 -c "
 import json,sys,re
 d=sys.stdin.read()
@@ -430,7 +432,8 @@ pkill -9 -f "php -S 127.0.0.1:8000" 2>/dev/null || true
 ( cd "$PANEL_DIR" && env -u DATABASE_URL -u DB_URL PHP_CLI_SERVER_WORKERS=8 setsid "$PHP" "$PANEL_DIR/artisan" serve --no-reload --host=127.0.0.1 --port=8000 > "$E2E_BASE/panel.log" 2>&1 < /dev/null & )
 for i in $(seq 1 20); do curl -s -o /dev/null -w '' "$PANEL_URL" && break; sleep 1; done
 check "restart: panel back up" curl -s -o /dev/null $PANEL_URL
-check "restart: panel API still authorized" bash -c "curl -s -o /dev/null -w '%{http_code}' \"${AUTH[@]}\" $PANEL_URL/api/application/servers | grep -q 200"
+AUTH_CODE=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" $PANEL_URL/api/application/servers)
+check "restart: panel API still authorized" bash -c "test '$AUTH_CODE' = '200'"
 
 # daemon restart (server running should be re-adopted)
 curl -s -o /dev/null "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"signal": "start"}'
@@ -444,7 +447,8 @@ check "restart: daemon recovered + server re-adopted/registered" bash -c "[ \"$D
 
 # ══ 9. allocation sanity ═══════════════════════════════════════════════════
 echo "── phase: allocations"
-check "allocations: server has default allocation" bash -c "curl -s \"${AUTH[@]}\" $PANEL_URL/api/client/servers/$SERVER_UUID | grep -q 'allocation'"
+ALLOCS_JSON=$(curl -s "${AUTH[@]}" $PANEL_URL/api/client/servers/$SERVER_UUID)
+check "allocations: server has default allocation" bash -c "echo '$ALLOCS_JSON' | grep -q 'allocation'"
 
 # ══ summary ═══════════════════════════════════════════════════════════════
 echo "════════════════════════════════════════════════════════"

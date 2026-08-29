@@ -18,7 +18,7 @@
         "files": "{}",
         "startup": "{\"done\": \"Serving HTTP\", \"user_interaction\": [], \"strip_ansi\": false}",
         "logs": "{}",
-        "stop": "{\"type\": \"signal\", \"value\": \"SIGTERM\"}"
+        "stop": "^SIGTERM"
     },
     "scripts": {
         "installation": {

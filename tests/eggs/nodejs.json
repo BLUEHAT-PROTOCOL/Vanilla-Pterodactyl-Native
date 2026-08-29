@@ -18,7 +18,7 @@
         "files": "{}",
         "startup": "{\"done\": \"e2e-server-ready\", \"user_interaction\": [], \"strip_ansi\": false}",
         "logs": "{}",
-        "stop": "{\"type\": \"command\", \"value\": \"stop\"}"
+        "stop": "stop"
     },
     "scripts": {
         "installation": {
