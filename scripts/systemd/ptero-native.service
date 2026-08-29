@@ -1,0 +1,17 @@
+[Unit]
+Description=ptero-native daemon (native wings-compatible runtime)
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/ptero-native
+ExecStart=/opt/ptero-native/bin/ptero-native --config /etc/ptero-native/config.yml
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+StandardOutput=append:/var/log/ptero-native/daemon.log
+StandardError=append:/var/log/ptero-native/daemon.log
+
+[Install]
+WantedBy=multi-user.target

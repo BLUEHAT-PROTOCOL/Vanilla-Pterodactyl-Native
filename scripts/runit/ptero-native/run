@@ -1,0 +1,4 @@
+#!/bin/sh
+# runit service: /etc/service/ptero-native/run
+exec 2>&1
+exec /opt/ptero-native/bin/ptero-native --config /etc/ptero-native/config.yml
