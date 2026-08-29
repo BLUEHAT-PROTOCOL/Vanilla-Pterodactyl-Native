@@ -1,0 +1,42 @@
+{
+    "_comment": "Generated for Vanilla Pterodactyl Native E2E",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-29T00:00:00+00:00",
+    "name": "Python E2E",
+    "author": "e2e@vanilla-native.local",
+    "description": "Generic Python application (E2E test egg)",
+    "features": null,
+    "docker_images": {
+        "Python 3.12": "ghcr.io/pterodactyl/yolks:python_3.12"
+    },
+    "file_denylist": [],
+    "startup": "python3 /home/container/{{SERVER_FILE}}",
+    "config": {
+        "files": "{}",
+        "startup": "{\"done\": \"e2e-server-ready\", \"user_interaction\": [], \"strip_ansi\": false}",
+        "logs": "{}",
+        "stop": "{\"type\": \"command\", \"value\": \"stop\"}"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\necho 'python install: nothing to do'\nexit 0",
+            "container": "ghcr.io/pterodactyl/installers:alpine",
+            "entrypoint": "/bin/ash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Server File",
+            "description": "The python entry file",
+            "env_variable": "SERVER_FILE",
+            "default_value": "main.py",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:120",
+            "field_type": "text"
+        }
+    ]
+}

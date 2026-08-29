@@ -1,0 +1,31 @@
+{
+    "_comment": "Generated for Vanilla Pterodactyl Native E2E",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-29T00:00:00+00:00",
+    "name": "Static E2E",
+    "author": "e2e@vanilla-native.local",
+    "description": "Static file server (E2E test egg)",
+    "features": null,
+    "docker_images": {
+        "Debian": "ghcr.io/pterodactyl/yolks:debian"
+    },
+    "file_denylist": [],
+    "startup": "python3 -m http.server {{SERVER_PORT}}",
+    "config": {
+        "files": "{}",
+        "startup": "{\"done\": \"Serving HTTP\", \"user_interaction\": [], \"strip_ansi\": false}",
+        "logs": "{}",
+        "stop": "{\"type\": \"signal\", \"value\": \"SIGTERM\"}"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\necho 'static install: nothing to do'\nexit 0",
+            "container": "ghcr.io/pterodactyl/installers:alpine",
+            "entrypoint": "/bin/ash"
+        }
+    },
+    "variables": []
+}

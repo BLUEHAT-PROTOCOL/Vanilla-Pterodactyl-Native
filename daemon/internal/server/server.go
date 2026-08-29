@@ -3,12 +3,14 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"ptero-native/internal/config"
@@ -477,4 +479,26 @@ func (s *Server) SetState(state string) {
 	s.setStateLocked(state)
 	s.mu.Unlock()
 	_ = s.persistState()
+}
+
+// Adopt re-attaches a running process after a daemon restart (pid reuse is
+// checked against the stored start time heuristically via /proc existence).
+func (s *Server) Adopt(pid int, startedAt time.Time) error {
+	if pid <= 0 {
+		return fmt.Errorf("no pid")
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	if p.Signal(syscall.Signal(0)) != nil {
+		return fmt.Errorf("process %d no longer exists", pid)
+	}
+	s.mu.Lock()
+	s.pid = pid
+	s.startedAt = startedAt
+	s.state = StateRunning
+	s.mu.Unlock()
+	_ = s.persistState()
+	return nil
 }

@@ -54,9 +54,18 @@ func main() {
 	// load persisted local state, then re-sync from panel (source of truth)
 	registry.LoadState()
 	syncServersFromPanel(panelClient, registry, log)
+	adopted := 0
 	for _, s := range registry.All() {
 		s.SetQuota(quota)
 		s.ChownVolume()
+		if st := s.Snapshot(); st.PID > 0 {
+			if err := s.Adopt(st.PID, *st.StartedAt); err == nil {
+				adopted++
+			}
+		}
+	}
+	if adopted > 0 {
+		log.Info("re-adopted %d running process(es) after restart", adopted)
 	}
 
 	app := &api.App{
