@@ -104,15 +104,15 @@ func (s *Server) applyEggConfigs(vol string) {
 		if cf.File == "" {
 			cf.File = file
 		}
-		replaces := make([]interface{}, 0, len(cf.Replace))
+		replaces := make([]map[string]string, 0, len(cf.Replace))
 		for _, r := range cf.Replace {
-			replaces = append(replaces, map[string]interface{}{
+			replaces = append(replaces, map[string]string{
 				"match":        r.Match,
 				"if_value":     r.IfValue,
 				"replace_with": r.ReplaceWith,
 			})
 		}
-		if err := eggcompat.ApplyConfigFile(vol, cf.File, replaces, cf.Find); err != nil {
+		if err := eggcompat.ApplyEggConfig(vol, cf.File, cf.Parser, replaces, cf.Find); err != nil {
 			if s.log != nil {
 				s.log.Warn("egg config %s: %v", cf.File, err)
 			}
