@@ -88,6 +88,8 @@ class ServerConfigurationStructureService
                 'id' => $server->egg->uuid,
                 'file_denylist' => $server->egg->inherit_file_denylist,
             ],
+            // Native runtime hint for the ptero-native daemon (ignored by Wings).
+            'runtime' => app(\Pterodactyl\Services\Runtime\RuntimeResolutionService::class)->runtimeKey($server),
         ];
     }
 

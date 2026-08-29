@@ -105,6 +105,8 @@ class Egg extends Model implements Identifiable
         'script_entry',
         'script_container',
         'copy_script_from',
+        'native_compat',
+        'native_notes',
     ];
 
     /**

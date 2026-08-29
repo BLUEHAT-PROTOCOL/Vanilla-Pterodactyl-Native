@@ -23,3 +23,5 @@ Route::group(['prefix' => '/backups'], function () {
     Route::post('/{backup}', [Remote\Backups\BackupStatusController::class, 'index']);
     Route::post('/{backup}/restore', [Remote\Backups\BackupStatusController::class, 'restore']);
 });
+// Native runtime mapping table consumed by the ptero-native daemon.
+Route::get('/runtime/mappings', Remote\Runtime\RuntimeMappingsController::class);

@@ -122,3 +122,28 @@ Route::group(['prefix' => '/nests'], function () {
         Route::get('/{egg:id}', [Application\Nests\EggController::class, 'view'])->name('api.application.nests.eggs.view');
     });
 });
+
+/*
+|--------------------------------------------------------------------------
+| Native Runtime Controller Routes
+|--------------------------------------------------------------------------
+|
+| Endpoint: /api/application/runtime/*
+|
+| Native runtime profiles and docker-image → runtime mappings used by the
+| ptero-native daemon (Docker-free deployments).
+|
+*/
+Route::group(['prefix' => '/runtime'], function () {
+    Route::get('/profiles', [Application\Runtime\RuntimeProfileController::class, 'index'])->name('api.application.runtime.profiles');
+    Route::get('/profiles/{profile:uuid}', [Application\Runtime\RuntimeProfileController::class, 'view'])->name('api.application.runtime.profiles.view');
+    Route::post('/profiles', [Application\Runtime\RuntimeProfileController::class, 'store']);
+    Route::patch('/profiles/{profile:uuid}', [Application\Runtime\RuntimeProfileController::class, 'update']);
+    Route::delete('/profiles/{profile:uuid}', [Application\Runtime\RuntimeProfileController::class, 'delete']);
+
+    Route::get('/mappings', [Application\Runtime\RuntimeMappingController::class, 'index'])->name('api.application.runtime.mappings');
+    Route::get('/resolve', [Application\Runtime\RuntimeMappingController::class, 'resolve'])->name('api.application.runtime.resolve');
+    Route::post('/mappings', [Application\Runtime\RuntimeMappingController::class, 'store']);
+    Route::patch('/mappings/{mapping:id}', [Application\Runtime\RuntimeMappingController::class, 'update']);
+    Route::delete('/mappings/{mapping:id}', [Application\Runtime\RuntimeMappingController::class, 'delete']);
+});
