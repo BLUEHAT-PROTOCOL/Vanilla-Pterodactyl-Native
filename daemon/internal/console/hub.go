@@ -19,13 +19,13 @@ import (
 
 // client is one connected websocket session.
 type client struct {
-	conn     *websocket.Conn
-	uuid     string
-	writeMu  sync.Mutex
-	permUID  string
-	authed   bool
-	sendCh   chan outMsg
-	closed   bool
+	conn    *websocket.Conn
+	uuid    string
+	writeMu sync.Mutex
+	permUID string
+	authed  bool
+	sendCh  chan outMsg
+	closed  bool
 }
 
 type outMsg struct {

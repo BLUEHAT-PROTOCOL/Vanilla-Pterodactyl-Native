@@ -100,7 +100,6 @@ func (a *App) runInstall(ctx context.Context, s *server.Server, job *installJob,
 		return
 	}
 
-
 	vol := a.Cfg.ServerVolume(uuid)
 	_ = os.MkdirAll(vol, 0o755)
 

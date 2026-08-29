@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"ptero-native/internal/api"
-	"ptero-native/internal/console"
 	"ptero-native/internal/config"
+	"ptero-native/internal/console"
 	"ptero-native/internal/eggcompat"
 	"ptero-native/internal/panel"
 	"ptero-native/internal/server"

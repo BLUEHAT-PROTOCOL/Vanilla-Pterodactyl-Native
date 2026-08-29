@@ -62,7 +62,12 @@ class EggsCompatAuditCommand extends Command
         $notes = [];
         $images = $egg->docker_images ?? [];
         $startup = (string) $egg->startup;
+        // config_files is stored as a raw JSON string; normalize it.
         $configFiles = $egg->config_files ?? [];
+        if (is_string($configFiles)) {
+            $decoded = json_decode($configFiles, true);
+            $configFiles = is_array($decoded) ? $decoded : [];
+        }
         $installScript = (string) $egg->script_install;
 
         $hasMapping = false;

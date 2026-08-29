@@ -180,9 +180,9 @@ func (a *App) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	bid := r.PathValue("backup")
 	var body struct {
-		Adapter            string `json:"adapter"`
-		TruncateDirectory bool `json:"truncate_directory"`
-		DownloadURL        string `json:"download_url"`
+		Adapter           string `json:"adapter"`
+		TruncateDirectory bool   `json:"truncate_directory"`
+		DownloadURL       string `json:"download_url"`
 	}
 	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body)
 

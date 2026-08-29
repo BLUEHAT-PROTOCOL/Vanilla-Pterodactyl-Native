@@ -2,9 +2,9 @@ package api
 
 import (
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
-	"os"
 
 	"ptero-native/internal/util"
 )
@@ -44,7 +44,7 @@ func (a *App) handleSystemConfig(w http.ResponseWriter, r *http.Request) {
 			"port":    8080,
 		},
 		"allocations": map[string]interface{}{
-			"auto_create": false,
+			"auto_create":   false,
 			"user_blocking": 0,
 		},
 		"detect_long_running": true,

@@ -9,10 +9,10 @@ import (
 
 // Stats is the wings-compatible stats payload.
 type Stats struct {
-	Uptime  int64         `json:"uptime"`
-	Memory  MemoryStats   `json:"memory"`
-	CPU     CPUStats      `json:"cpu"`
-	Disk    DiskStats     `json:"disk"`
+	Uptime int64       `json:"uptime"`
+	Memory MemoryStats `json:"memory"`
+	CPU    CPUStats    `json:"cpu"`
+	Disk   DiskStats   `json:"disk"`
 }
 
 // MemoryStats — current usage vs limit.

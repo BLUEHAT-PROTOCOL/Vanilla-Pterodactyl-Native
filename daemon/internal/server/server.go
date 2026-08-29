@@ -97,9 +97,9 @@ type StopConfig struct {
 
 // StartupConfig describes state detection.
 type StartupConfig struct {
-	Done           []string `json:"done"`
+	Done            []string `json:"done"`
 	UserInteraction []string `json:"user_interaction"`
-	StripAnsi      bool     `json:"strip_ansi"`
+	StripAnsi       bool     `json:"strip_ansi"`
 }
 
 // ConfigReplace is one replacement rule.
@@ -111,18 +111,18 @@ type ConfigReplace struct {
 
 // ConfigFile is one egg config file entry.
 type ConfigFile struct {
-	File     string                 `json:"file"` // relative path
-	Parser   string                 `json:"parser,omitempty"`
-	Find     map[string]interface{} `json:"find"`
-	Replace  []ConfigReplace        `json:"replace"`
+	File    string                 `json:"file"` // relative path
+	Parser  string                 `json:"parser,omitempty"`
+	Find    map[string]interface{} `json:"find"`
+	Replace []ConfigReplace        `json:"replace"`
 }
 
 // ProcessConfiguration is the egg behavior config (v1.15).
 type ProcessConfiguration struct {
-	Startup StartupConfig          `json:"startup"`
-	Stop    StopConfig             `json:"stop"`
-	Configs map[string]ConfigFile  `json:"configs"`
-	Logfile interface{}            `json:"logfile,omitempty"`
+	Startup StartupConfig         `json:"startup"`
+	Stop    StopConfig            `json:"stop"`
+	Configs map[string]ConfigFile `json:"configs"`
+	Logfile interface{}           `json:"logfile,omitempty"`
 }
 
 // ServerConfig is the full daemon-side server configuration (panel remote detail shape).
@@ -220,9 +220,9 @@ type Server struct {
 	crashCount   int
 	installedVal int
 
-	logs *Ring
-	hub  Hub // console hub (may be nil in core-only builds/tests)
-	quota Quota
+	logs      *Ring
+	hub       Hub // console hub (may be nil in core-only builds/tests)
+	quota     Quota
 	cpuSample *procCPUSample
 
 	diskCacheBytes int64

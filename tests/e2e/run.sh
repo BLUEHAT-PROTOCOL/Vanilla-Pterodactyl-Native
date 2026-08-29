@@ -99,11 +99,10 @@ limits:
 debug: false
 EOF
 
-# start panel (php artisan serve)
-pkill -f "artisan serve" 2>/dev/null
-setsid "$PHP" artisan serve --host=127.0.0.1 --port=8000 \
-  > "$E2E_BASE/panel.log" 2>&1 < /dev/null &
-export PANEL_PID=$!
+# start panel (php artisan serve) — absolute artisan path, sandbox env neutralized
+pkill -f "artisan serve" 2>/dev/null; sleep 1
+( cd "$PANEL_DIR" && env -u DATABASE_URL -u DB_URL PHP_CLI_SERVER_WORKERS=8 setsid "$PHP" "$PANEL_DIR/artisan" serve --no-reload --host=127.0.0.1 --port=8000 \
+  > "$E2E_BASE/panel.log" 2>&1 < /dev/null & )
 disown
 # start daemon
 pkill -f "ptero-native --config" 2>/dev/null
@@ -111,6 +110,10 @@ setsid "$DAEMON_DIR/bin/ptero-native" --config "$E2E_BASE/daemon-config.yml" \
   > "$E2E_BASE/daemon.log" 2>&1 < /dev/null &
 export DAEMON_PID=$!
 disown
+
+# wait for both services to accept connections before judging them
+for i in $(seq 1 30); do curl -s -o /dev/null "$PANEL_URL" && break; sleep 1; done
+for i in $(seq 1 30); do curl -s -o /dev/null "${DAEMON_URL}" && break; sleep 1; done
 
 check "panel: artisan serve up" bash -c "curl -s -o /dev/null -w '%{http_code}' $PANEL_URL | grep -qE '200|302|301'"
 check "daemon: /api/system responds" bash -c "curl -s -H 'Authorization: Bearer $NODE_TID.$NODE_TOK' $DAEMON_URL/api/system | grep -q '\"version\"'"
@@ -122,11 +125,19 @@ DAUTH=(-H "Authorization: Bearer $NODE_TID.$NODE_TOK" -H "Accept: application/js
 echo "── phase: admin login + egg import"
 JAR="$STATE_DIR/cookies.txt"; rm -f "$JAR"
 LOGIN_PAGE=$(curl -s -c "$JAR" $PANEL_URL/auth/login)
-CSRF=$(echo "$LOGIN_PAGE" | grep -o 'name="_token" value="[^"]*"' | head -1 | sed 's/.*value="//;s/"//')
+# Pterodactyl login is a Vue form: the CSRF token lives in a meta tag.
+CSRF=$(echo "$LOGIN_PAGE" | grep -o 'name="csrf-token" content="[^"]*"' | head -1 | sed 's/.*content="//;s/"//')
 check "panel: login page reachable" test -n "$LOGIN_PAGE"
-LOGIN_CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -c "$JAR" -X POST $PANEL_URL/auth/login \
-  -d "_token=$CSRF&email=admin@example.com&password=e2epassword")
-check "panel: admin login accepted" test "$LOGIN_CODE" = "200" -o "$LOGIN_CODE" = "302"
+# Pterodactyl login is an XHR endpoint: field "user" + JSON response.
+LOGIN_RESP=$(curl -s -w '\n%{http_code}' -b "$JAR" -c "$JAR" -X POST $PANEL_URL/auth/login \
+  -H "X-CSRF-TOKEN: $CSRF" -H "Accept: application/json" \
+  -d "user=admin@example.com&password=e2epassword")
+LOGIN_CODE=$(echo "$LOGIN_RESP" | tail -1)
+check "panel: admin login accepted" bash -c "test '$LOGIN_CODE' = '200' && echo '$LOGIN_RESP' | grep -q '\"complete\":true'"
+
+# login regenerates the session (and rotates the CSRF token). Refresh it from
+# an authenticated page — the admin layout emits <meta name="_token">.
+CSRF=$(curl -s -b "$JAR" -c "$JAR" $PANEL_URL/admin | grep -o 'name="_token" content="[^"]*"' | head -1 | sed 's/.*content="//;s/"//')
 
 # import eggs through the admin web route (multipart + session)
 NEST_ID=1
@@ -134,6 +145,7 @@ import_egg() {
   local file="$1"
   local out code
   code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X POST $PANEL_URL/admin/nests/import \
+    -H "X-CSRF-TOKEN: $CSRF" \
     -F "import_file=@$file" -F "import_to_nest=$NEST_ID")
   [ "$code" = "302" ]
 }
@@ -185,6 +197,7 @@ CREATE=$(curl -s -w '\n%{http_code}' "${AUTH[@]}" -X POST $PANEL_URL/api/applica
     \"docker_image\": \"ghcr.io/pterodactyl/yolks:nodejs_20\",
     \"startup\": \"node /home/container/{{SERVER_FILE}}\",
     \"environment\": {\"SERVER_FILE\": \"index.js\"},
+    \"allocation\": {\"default\": $ALLOC_ID},
     \"limits\": {\"memory\": 256, \"swap\": 0, \"disk\": 1024, \"io\": 500, \"cpu\": 0, \"threads\": null},
     \"feature_limits\": {\"databases\": 0, \"allocations\": 2, \"backups\": 5},
     \"start_on_completion\": false
@@ -388,9 +401,9 @@ check "schedule: task created (201)" test "$TASK_CODE" = "201"
 
 # ══ 8. restart panel + daemon ═══════════════════════════════════════════════
 echo "── phase: restarts"
-# panel restart
+# panel restart — absolute artisan path, sandbox env neutralized
 pkill -f "artisan serve" 2>/dev/null; sleep 1
-setsid "$PHP" artisan serve --host=127.0.0.1 --port=8000 > "$E2E_BASE/panel.log" 2>&1 < /dev/null &
+( cd "$PANEL_DIR" && env -u DATABASE_URL -u DB_URL PHP_CLI_SERVER_WORKERS=8 setsid "$PHP" "$PANEL_DIR/artisan" serve --no-reload --host=127.0.0.1 --port=8000 > "$E2E_BASE/panel.log" 2>&1 < /dev/null & )
 disown
 for i in $(seq 1 20); do curl -s -o /dev/null $PANEL_URL && break; sleep 1; done
 check "restart: panel back up" curl -s -o /dev/null $PANEL_URL

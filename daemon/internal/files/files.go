@@ -3,7 +3,6 @@ package files
 
 import (
 	"archive/tar"
-	"strconv"
 	"archive/zip"
 	"compress/gzip"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )

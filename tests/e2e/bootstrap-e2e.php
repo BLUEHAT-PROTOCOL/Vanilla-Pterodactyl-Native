@@ -9,6 +9,7 @@
  */
 
 use Illuminate\Contracts\Console\Kernel;
+use Illuminate\Contracts\Encryption\Encrypter;
 use Pterodactyl\Models\ApiKey;
 use Pterodactyl\Models\Allocation;
 use Pterodactyl\Models\Node;
@@ -22,9 +23,11 @@ $kernel->bootstrap();
 $base = $argv[1] ?? '/home/z/e2e';
 
 // --- admin user -----------------------------------------------------------
+// NOTE: User::$fillable intentionally excludes uuid upstream; forceCreate is
+// required (mirrors upstream UserCreationService force-fill path).
 $admin = User::query()->where('email', 'admin@example.com')->first();
 if (!$admin) {
-    $admin = User::query()->create([
+    $admin = User::forceCreate([
         'external_id' => \Ramsey\Uuid\Uuid::uuid4()->toString(),
         'uuid' => \Ramsey\Uuid\Uuid::uuid4()->toString(),
         'username' => 'admin',
@@ -48,35 +51,39 @@ $stored = $base . '/e2e-token.txt';
 if ($existingKey && file_exists($stored)) {
     $token = trim(file_get_contents($stored));
 } else {
-    $newToken = $admin->createToken('e2e');
-    $token = $newToken->plainTextToken;
+    $newToken = $admin->createToken('e2e', null);
+    // Pterodactyl wires format: <identifier><plain> (see ApiKey::findToken).
+    $token = $newToken->accessToken->identifier . $newToken->plainTextToken;
     file_put_contents($stored, $token);
 }
 
 // --- node + allocations ----------------------------------------------------
+// NOTE: node token columns are encrypted (upstream parity) and the camelCase
+// columns must match the nodes table schema exactly.
 $node = Node::query()->where('name', 'native-e2e')->first();
 if (!$node) {
     $location = \Pterodactyl\Models\Location::query()->firstOrCreate(
         ['short' => 'native'],
         ['long' => 'Native']
     );
-    $node = Node::query()->create([
+    $node = Node::forceCreate([
         'public' => true,
         'name' => 'native-e2e',
         'location_id' => $location->id,
         'fqdn' => '127.0.0.1',
         'scheme' => 'http',
         'behind_proxy' => false,
-        'memory' => 0,
+        'maintenance_mode' => false,
+        'memory' => 1024,
         'memory_overallocate' => 0,
-        'disk' => 0,
+        'disk' => 10240,
         'disk_overallocate' => 0,
         'upload_size' => 100,
-        'daemon_listen' => 18080,
-        'daemon_sftp' => 2022,
-        'daemon_base' => '/home/z/e2e/daemon-data/volumes',
-        'daemon_token_id' => \Illuminate\Support\Str::random(16),
-        'daemon_token' => \Illuminate\Support\Str::random(32),
+        'daemonListen' => 18080,
+        'daemonSFTP' => 2022,
+        'daemonBase' => '/home/z/e2e/daemon-data/volumes',
+        'daemon_token_id' => \Illuminate\Support\Str::random(Node::DAEMON_TOKEN_ID_LENGTH),
+        'daemon_token' => app(Encrypter::class)->encrypt(\Illuminate\Support\Str::random(Node::DAEMON_TOKEN_LENGTH)),
     ]);
 
     // allocation pool

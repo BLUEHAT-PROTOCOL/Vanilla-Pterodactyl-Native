@@ -42,7 +42,7 @@ func NewManager() *Manager {
 
 // running tracks in-flight backup jobs.
 var running = struct {
-	mu sync.Mutex
+	mu  sync.Mutex
 	set map[string]struct{}
 }{set: map[string]struct{}{}}
 
