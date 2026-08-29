@@ -28,7 +28,8 @@ const timer = setTimeout(() => {
 
 ws.on('open', () => {
   results.connected = true;
-  authed = true;
+  // wings protocol: authenticate as the FIRST message after connecting
+  ws.send(JSON.stringify({ event: 'auth', args: [token] }));
   // request recent logs + stats (wings protocol)
   ws.send(JSON.stringify({ event: 'send logs', args: ['-200'] }));
   ws.send(JSON.stringify({ event: 'send stats', args: [] }));

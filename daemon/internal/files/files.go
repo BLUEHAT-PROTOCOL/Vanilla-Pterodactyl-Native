@@ -19,12 +19,16 @@ import (
 
 // Entry is the wings FileEntry JSON (created/modified REQUIRED by panel frontend).
 type Entry struct {
-	Name     string `json:"name"`
-	Size     int64  `json:"size"`
-	Mode     uint32 `json:"mode"`
-	ModeBits string `json:"mode_bits"`
-	Created  string `json:"created"`
-	Modified string `json:"modified"`
+	Name      string `json:"name"`
+	Size      int64  `json:"size"`
+	Mode      uint32 `json:"mode"`
+	ModeBits  string `json:"mode_bits"`
+	Directory bool   `json:"directory"`
+	File      bool   `json:"file"`
+	Symlink   bool   `json:"symlink"`
+	Mime      string `json:"mime"`
+	Created   string `json:"created"`
+	Modified  string `json:"modified"`
 }
 
 func rfc3339(t time.Time) string {
@@ -45,13 +49,59 @@ func modeBitsString(mode fs.FileMode) string {
 
 // EntryFromInfo converts an os.FileInfo into a wings FileEntry.
 func EntryFromInfo(info os.FileInfo) Entry {
+	mode := info.Mode()
 	return Entry{
-		Name:     info.Name(),
-		Size:     info.Size(),
-		Mode:     uint32(info.Mode()),
-		ModeBits: modeBitsString(info.Mode()),
-		Created:  rfc3339(cTime(info)),
-		Modified: rfc3339(info.ModTime()),
+		Name:      info.Name(),
+		Size:      info.Size(),
+		Mode:      uint32(mode),
+		ModeBits:  modeBitsString(mode),
+		Directory: mode.IsDir(),
+		File:      mode.IsRegular(),
+		Symlink:   mode&os.ModeSymlink != 0,
+		Mime:      mimeOf(info),
+		Created:   rfc3339(cTime(info)),
+		Modified:  rfc3339(info.ModTime()),
+	}
+}
+
+// mimeOf returns a conservative mime type (wings uses mimetype detection;
+// a small built-in table covers the common server-file cases).
+func mimeOf(info os.FileInfo) string {
+	if info.IsDir() {
+		return "inode/directory"
+	}
+	name := strings.ToLower(info.Name())
+	switch {
+	case strings.HasSuffix(name, ".js"):
+		return "application/javascript"
+	case strings.HasSuffix(name, ".json"):
+		return "application/json"
+	case strings.HasSuffix(name, ".yml"), strings.HasSuffix(name, ".yaml"):
+		return "text/yaml"
+	case strings.HasSuffix(name, ".properties"), strings.HasSuffix(name, ".ini"), strings.HasSuffix(name, ".conf"), strings.HasSuffix(name, ".cfg"):
+		return "text/plain"
+	case strings.HasSuffix(name, ".log"), strings.HasSuffix(name, ".txt"):
+		return "text/plain"
+	case strings.HasSuffix(name, ".tar.gz"), strings.HasSuffix(name, ".tgz"):
+		return "application/gzip"
+	case strings.HasSuffix(name, ".zip"):
+		return "application/zip"
+	case strings.HasSuffix(name, ".jar"):
+		return "application/java-archive"
+	case strings.HasSuffix(name, ".py"):
+		return "text/x-python"
+	case strings.HasSuffix(name, ".html"), strings.HasSuffix(name, ".htm"):
+		return "text/html"
+	case strings.HasSuffix(name, ".css"):
+		return "text/css"
+	case strings.HasSuffix(name, ".png"):
+		return "image/png"
+	case strings.HasSuffix(name, ".jpg"), strings.HasSuffix(name, ".jpeg"):
+		return "image/jpeg"
+	case strings.HasSuffix(name, ".xml"):
+		return "text/xml"
+	default:
+		return "application/octet-stream"
 	}
 }
 

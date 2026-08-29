@@ -540,7 +540,11 @@ func (a *App) handleUpload(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, util.ErrBadRequest("bad token"))
 		return
 	}
-	uuid, _ := claims["server"].(string)
+	// panel v1.15 issues "server_uuid"; accept the legacy "server" alias too
+	uuid, _ := claims["server_uuid"].(string)
+	if uuid == "" {
+		uuid, _ = claims["server"].(string)
+	}
 	s, ok := a.Registry.Get(uuid)
 	if !ok {
 		util.WriteError(w, util.ErrNotFound("server"))

@@ -170,7 +170,18 @@ func (s *Server) BuildEnv() []string {
 // (reading or writing). Do NOT acquire the lock here — Start() invokes this
 // while holding the write lock (double-RLock inside Lock self-deadlocks).
 func (s *Server) buildEnvLocked() []string {
-	envMap := s.Cfg.EnvStringMap()
+	// Base: inherit the daemon's own environment so system paths (node, php,
+	// python, ...) resolve. Wings gets a full PATH from the docker image; the
+	// native equivalent is the host environment. Explicit overrides below win.
+	envMap := map[string]string{}
+	for _, kv := range os.Environ() {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			envMap[kv[:i]] = kv[i+1:]
+		}
+	}
+	for k, v := range s.Cfg.EnvStringMap() {
+		envMap[k] = v
+	}
 
 	def := s.Cfg.Settings.Allocations.Default
 	envMap["SERVER_IP"] = def.IP

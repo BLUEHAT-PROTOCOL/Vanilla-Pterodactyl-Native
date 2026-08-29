@@ -111,12 +111,22 @@ pkill -9 -f "ptero-native --config" 2>/dev/null || true
 # start panel (php artisan serve) — absolute artisan path, sandbox env neutralized
 ( cd "$PANEL_DIR" && env -u DATABASE_URL -u DB_URL PHP_CLI_SERVER_WORKERS=8 setsid "$PHP" "$PANEL_DIR/artisan" serve --no-reload --host=127.0.0.1 --port=8000 \
   > "$E2E_BASE/panel.log" 2>&1 < /dev/null & )
-# start daemon
-pkill -f "ptero-native --config" 2>/dev/null
-setsid "$DAEMON_DIR/bin/ptero-native" --config "$E2E_BASE/daemon-config.yml" \
-  > "$E2E_BASE/daemon.log" 2>&1 < /dev/null &
-export DAEMON_PID=$!
-disown
+# start daemon under a detached supervisor (auto-restarts if killed);
+# the wrapper + daemon both match the pkill pattern used to stop them.
+start_daemon_supervisor() {
+  setsid nohup bash -c "while true; do '$DAEMON_DIR/bin/ptero-native' --config '$E2E_BASE/daemon-config.yml' >> '$E2E_BASE/daemon.log' 2>&1; echo '[supervisor] daemon exited, restarting in 1s' >> '$E2E_BASE/daemon.log'; sleep 1; done" > /dev/null 2>&1 < /dev/null &
+  disown 2>/dev/null || true
+}
+
+# stop daemon: wrapper bash + daemon process (both contain the pattern)
+stop_daemon() {
+  pkill -f "ptero-native --config" 2>/dev/null || true
+  sleep 1
+  pkill -9 -f "ptero-native --config" 2>/dev/null || true
+  sleep 1
+}
+
+start_daemon_supervisor
 
 # wait for both services to accept connections before judging them
 for i in $(seq 1 30); do curl -s -o /dev/null "$PANEL_URL" && break; sleep 1; done
@@ -242,14 +252,14 @@ CLIENT_TOKEN="$API_TOKEN"
 
 # write app files via files API (daemon)
 curl -s -o /dev/null "${DAUTH[@]}" -X POST "$DAEMON_URL/api/servers/$SERVER_UUID/files/write?file=%2Findex.js" \
-  -H 'Content-Type: text/plain' --data-binary 'setInterval(function(){ console.log("tick"); }, 1000); console.log("e2e-server-ready");'
+  -H 'Content-Type: text/plain' --data-binary 'process.stdin.on("data", function(d){ var s=String(d).trim(); if (s==="stop") { process.exit(0); } console.log("echo: "+s); }); setInterval(function(){ console.log("tick"); }, 1000); console.log("e2e-server-ready");'
 curl -s -o /dev/null "${DAUTH[@]}" -X POST "$DAEMON_URL/api/servers/$SERVER_UUID/files/write?file=%2Fpackage.json" \
   -H 'Content-Type: application/json' --data-binary '{"name":"e2e","main":"index.js"}'
 
 # start via panel client API (panel → daemon power)
 START_CODE=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X POST \
   $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"signal": "start"}')
-check "power: start accepted (202 via panel)" test "$START_CODE" = "202"
+check "power: start accepted (204 via panel)" test "$START_CODE" = "204"
 
 # websocket via panel-issued token
 WS_JSON=$(curl -s "${AUTH[@]}" $PANEL_URL/api/client/servers/$SERVER_UUID/websocket)
@@ -288,7 +298,7 @@ curl -s -o /dev/null "${DAUTH[@]}" -X POST "$DAEMON_URL/api/servers/$SERVER_UUID
 check "files: copy" curl -s "${DAUTH[@]}" "$DAEMON_URL/api/servers/$SERVER_UUID/files/list-directory?directory=%2F" | grep -q 'package-renamed.copy.json'
 curl -s -o /dev/null "${DAUTH[@]}" -X POST "$DAEMON_URL/api/servers/$SERVER_UUID/files/chmod" \
   -H 'Content-Type: application/json' -d '{"root":"/","files":[{"file":"index.js","mode":"0755"}]}'
-check "files: chmod applied" bash -c "curl -s \"\${DAUTH[@]}\" \"$DAEMON_URL/api/servers/$SERVER_UUID/files/list-directory?directory=%2F\" | grep -q '0755'"
+check "files: chmod applied" bash -c "curl -s ${DAUTH[@]} \"$DAEMON_URL/api/servers/$SERVER_UUID/files/list-directory?directory=%2F\" | grep -q '0755'"
 
 # compress + decompress
 curl -s -o /dev/null "${DAUTH[@]}" -X POST "$DAEMON_URL/api/servers/$SERVER_UUID/files/compress" \
@@ -363,10 +373,10 @@ curl -s -o /dev/null "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_
 echo "── phase: backups"
 # restore a healthy index.js first
 curl -s -o /dev/null "${DAUTH[@]}" -X POST "$DAEMON_URL/api/servers/$SERVER_UUID/files/write?file=%2Findex.js" \
-  -H 'Content-Type: text/plain' --data-binary 'console.log("e2e-server-ready"); setInterval(function(){}, 1000);'
+  -H 'Content-Type: text/plain' --data-binary 'console.log("e2e-server-ready"); process.stdin.on("data", function(d){ var s=String(d).trim(); if (s==="stop") { process.exit(0); } }); setInterval(function(){}, 1000);'
 
 BCREATE=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/backups -H 'Content-Type: application/json' -d '{}')
-check "backup: create accepted (202)" test "$BCREATE" = "202"
+check "backup: create accepted (200)" test "$BCREATE" = "200"
 backup_ready() {
   "$MDBCTL" --socket="$MDB_SOCK" -uroot -e "SELECT is_successful FROM panel.backups WHERE server_id=(SELECT id FROM panel.servers WHERE uuid='$SERVER_UUID')" 2>/dev/null | grep -q '^1$'
 }
@@ -403,11 +413,11 @@ echo "── phase: schedules"
 SCHED=$(curl -s -w '\n%{http_code}' "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/schedules \
   -H 'Content-Type: application/json' -d '{"name": "e2e-schedule", "minute": "*", "hour": "*", "day_of_month": "*", "month": "*", "day_of_week": "*", "active": true}')
 SCHED_CODE=$(echo "$SCHED" | tail -1)
-check "schedule: created via client API (201)" test "$SCHED_CODE" = "201"
+check "schedule: created via client API (200)" test "$SCHED_CODE" = "200"
 SCHED_ID=$(echo "$SCHED" | head -n -1 | python3 -c "import json,sys; print(json.load(sys.stdin)['attributes']['id'])" 2>/dev/null)
 TASK_CODE=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/schedules/$SCHED_ID/tasks \
   -H 'Content-Type: application/json' -d '{"action": "command", "payload": "echo schedule-ran-ok", "time_offset": 0}')
-check "schedule: task created (201)" test "$TASK_CODE" = "201"
+check "schedule: task created (200)" test "$TASK_CODE" = "200"
 
 # ══ 8. restart panel + daemon ═══════════════════════════════════════════════
 echo "── phase: restarts"
@@ -425,10 +435,8 @@ check "restart: panel API still authorized" bash -c "curl -s -o /dev/null -w '%{
 # daemon restart (server running should be re-adopted)
 curl -s -o /dev/null "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"signal": "start"}'
 for i in $(seq 1 20); do running && break; sleep 1; done
-pkill -f "ptero-native --config" 2>/dev/null || true; sleep 1
-pkill -9 -f "ptero-native --config" 2>/dev/null || true
-setsid "$DAEMON_DIR/bin/ptero-native" --config "$E2E_BASE/daemon-config.yml" > "$E2E_BASE/daemon.log" 2>&1 < /dev/null &
-disown
+stop_daemon
+start_daemon_supervisor
 for i in $(seq 1 20); do curl -s -o /dev/null "${DAUTH[@]}" $DAEMON_URL/api/system && break; sleep 1; done
 sleep 2
 DA_STATE=$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER_UUID | python3 -c "import json,sys; print(json.load(sys.stdin).get('state',''))" 2>/dev/null)

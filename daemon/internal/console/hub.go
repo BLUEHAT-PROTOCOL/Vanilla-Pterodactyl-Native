@@ -135,31 +135,21 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		// wings also accepts "Authorization: Bearer" for the ws route
 		token = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	}
-	if token == "" {
-		util.WriteJSON(w, http.StatusUnauthorized, map[string]interface{}{
-			"errors": []interface{}{util.NewErr(http.StatusUnauthorized, "UnauthorizedAccessException", "missing websocket token")},
-		})
-		return
-	}
 	// v1.15: panel signs ws tokens with the node daemon token (node->getDecryptedKey()).
-	secret := a.Cfg.Daemon.Token
-	claims, err := auth.ParseJWT(token, secret)
-	if err != nil {
-		util.WriteJSON(w, http.StatusUnauthorized, map[string]interface{}{
-			"errors": []interface{}{util.NewErr(http.StatusUnauthorized, "UnauthorizedAccessException", "invalid websocket token: "+err.Error())},
-		})
-		return
-	}
-	// v1.15 claim: server_uuid (fall back to sub)
-	claimServer := claims.ServerUUID
-	if claimServer == "" {
-		claimServer = claims.Sub
-	}
-	if claimServer != "" && claimServer != uuid {
-		util.WriteJSON(w, http.StatusForbidden, map[string]interface{}{
-			"errors": []interface{}{util.NewErr(http.StatusForbidden, "ForbiddenAccessException", "token does not match server")},
-		})
-		return
+	// wings parity: the JWT may arrive as a handshake token (query/header) or
+	// as the first {"event":"auth"} message after the upgrade.
+	var claims *auth.JWTClaims
+	handshakeAuth := false
+	if token != "" {
+		var err error
+		claims, err = h.verifyServerToken(token, uuid)
+		if err != nil {
+			util.WriteJSON(w, http.StatusUnauthorized, map[string]interface{}{
+				"errors": []interface{}{util.NewErr(http.StatusUnauthorized, "UnauthorizedAccessException", "invalid websocket token: "+err.Error())},
+			})
+			return
+		}
+		handshakeAuth = true
 	}
 
 	upgrader := websocket.Upgrader{
@@ -172,7 +162,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c := &client{conn: ws, uuid: uuid, authed: true, permUID: claims.UniqueID}
+	c := &client{conn: ws, uuid: uuid, authed: handshakeAuth, permUID: uniqueID(claims)}
 	h.mu.Lock()
 	if h.clients[uuid] == nil {
 		h.clients[uuid] = map[*client]struct{}{}
@@ -180,25 +170,12 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	h.clients[uuid][c] = struct{}{}
 	h.mu.Unlock()
 
-	// initial state + logs replay
-	c.send(outMsg{event: "status", data: map[string]string{"state": s.State()}})
-	for _, line := range s.ConsoleLines(100) {
-		c.send(outMsg{event: "console output", data: map[string]string{"line": line}})
-	}
-
-	// token expiry watch (panel JWT exp)
-	if claims.Exp > 0 {
-		go func() {
-			secs := claims.Exp - time.Now().Unix()
-			if secs > 60 {
-				time.Sleep(time.Duration(secs-60) * time.Second)
-				c.send(outMsg{event: "token expiring", data: map[string]int{"seconds_left": 60}})
-			}
-			if secs > 0 {
-				time.Sleep(time.Duration(secs) * time.Second)
-				c.send(outMsg{event: "token expired", data: map[string]interface{}{}})
-			}
-		}()
+	authDone := make(chan struct{})
+	if handshakeAuth {
+		go h.onAuthed(s, c, claims, authDone)
+	} else {
+		// wings gives clients ~10s to authenticate after connecting
+		_ = ws.SetReadDeadline(time.Now().Add(10 * time.Second))
 	}
 
 	// stats ticker: 1s while connected & running
@@ -248,11 +225,35 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		switch msg.Event {
+		case "auth":
+			if c.authed {
+				continue
+			}
+			jwtTok := ""
+			if len(msg.Args) > 0 {
+				jwtTok = msg.Args[0]
+			}
+			cl, err := h.verifyServerToken(jwtTok, uuid)
+			if err != nil {
+				c.send(outMsg{event: "auth error", data: map[string]string{"message": err.Error()}})
+				return
+			}
+			claims = cl
+			c.authed = true
+			c.permUID = uniqueID(cl)
+			_ = ws.SetReadDeadline(time.Time{})
+			go h.onAuthed(s, c, claims, authDone)
 		case "send commands":
+			if !c.authed {
+				continue
+			}
 			for _, cmd := range msg.Args {
 				_ = s.SendCommand(cmd)
 			}
 		case "send logs":
+			if !c.authed {
+				continue
+			}
 			n := 100
 			if len(msg.Args) > 0 {
 				if v, err := strconv.Atoi(msg.Args[0]); err == nil && v != 0 {
@@ -266,20 +267,91 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 				c.send(outMsg{event: "console output", data: map[string]string{"line": line}})
 			}
 		case "send stats":
+			if !c.authed {
+				continue
+			}
 			if stats := s.CollectStats(s.Quota()); stats != nil {
 				c.send(outMsg{event: "stats", data: map[string]interface{}{"data": stats}})
 			}
 		case "send install logs":
+			if !c.authed {
+				continue
+			}
 			// replay from install tracker is wired via api package buffer
 			for _, line := range a.InstallLogReplay(uuid) {
 				c.send(outMsg{event: "install output", data: map[string]string{"line": line}})
 			}
 		case "set state":
 			// panel clients never send this; ignore politely
-		case "auth":
-			// re-auth no-op (token from query is already validated)
 		default:
 			// unknown events ignored (wings parity)
 		}
+	}
+}
+
+var (
+	errBadToken       = simpleErr("malformed or invalid websocket token")
+	errServerMismatch = simpleErr("token does not match server")
+)
+
+type simpleErr string
+
+func (e simpleErr) Error() string { return string(e) }
+
+// verifyServerToken validates a panel-issued JWT against the node daemon
+// token and ensures the claim targets this server.
+func (h *Hub) verifyServerToken(token, uuid string) (*auth.JWTClaims, error) {
+	if token == "" {
+		return nil, errBadToken
+	}
+	claims, err := auth.ParseJWT(token, h.app.Cfg.Daemon.Token)
+	if err != nil {
+		return nil, err
+	}
+	claimServer := claims.ServerUUID
+	if claimServer == "" {
+		claimServer = claims.Sub
+	}
+	if claimServer != "" && claimServer != uuid {
+		return nil, errServerMismatch
+	}
+	return claims, nil
+}
+
+func uniqueID(claims *auth.JWTClaims) string {
+	if claims == nil {
+		return ""
+	}
+	return claims.UniqueID
+}
+
+// onAuthed sends the initial state + console replay and starts the token
+// expiry watchdog (called exactly once per authenticated session).
+func (h *Hub) onAuthed(s *server.Server, c *client, claims *auth.JWTClaims, done chan struct{}) {
+	select {
+	case <-done:
+		return
+	default:
+	}
+	defer func() { close(done) }()
+
+	c.send(outMsg{event: "auth success", data: map[string]interface{}{}})
+	c.send(outMsg{event: "status", data: map[string]string{"state": s.State()}})
+	for _, line := range s.ConsoleLines(100) {
+		c.send(outMsg{event: "console output", data: map[string]string{"line": line}})
+	}
+
+	if claims != nil && claims.Exp > 0 {
+		go func() {
+			secs := claims.Exp - time.Now().Unix()
+			if secs > 60 {
+				time.Sleep(time.Duration(secs-60) * time.Second)
+				c.send(outMsg{event: "token expiring", data: map[string]int{"seconds_left": 60}})
+			}
+			if secs > 0 {
+				time.Sleep(time.Duration(secs) * time.Second)
+				c.send(outMsg{event: "token expired", data: map[string]interface{}{}})
+			}
+		}()
 	}
 }

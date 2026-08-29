@@ -253,20 +253,24 @@ func (a *App) handlePower(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, err)
 		return
 	}
-	// Wings v1.15 sends {"signal":"start|stop|restart|kill"}; the legacy
-	// "state" alias is accepted for compatibility.
+	// The official Panel v1.15 forwards power actions as {"action": ...}; the
+	// legacy "state" and client-facing "signal" aliases are accepted too.
 	var body struct {
 		State  string `json:"state"`
 		Signal string `json:"signal"`
+		Action string `json:"action"`
 		Wait   bool   `json:"wait"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 		util.WriteError(w, util.ErrBadRequest("invalid power body"))
 		return
 	}
-	action := body.State
+	action := body.Action
 	if action == "" {
 		action = body.Signal
+	}
+	if action == "" {
+		action = body.State
 	}
 	if action == "" {
 		util.WriteError(w, util.ErrBadRequest("missing power state"))
