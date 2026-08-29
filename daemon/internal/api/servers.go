@@ -160,9 +160,10 @@ func (a *App) handleServerGet(w http.ResponseWriter, r *http.Request) {
 		"process_configuration": c.ProcessConfiguration,
 		// supervision state (wings exposes it through the list endpoint and
 		// the console; a superset here keeps parity tooling simple)
-		"state":     st.State,
-		"installed": st.Installed,
-		"suspended": c.Settings.Suspended,
+		"state":       st.State,
+		"installed":   st.Installed,
+		"suspended":   c.Settings.Suspended,
+		"crash_count": st.CrashCount,
 	})
 }
 

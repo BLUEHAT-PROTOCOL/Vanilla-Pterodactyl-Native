@@ -388,6 +388,16 @@ func (s *Server) stop(kill bool) error {
 	s.mu.RUnlock()
 
 	if pid == 0 {
+		// killing a crashed (already-exited) server acknowledges the state:
+		// reset the crash budget and mark offline, as wings does.
+		if kill && state == StateCrashed {
+			s.mu.Lock()
+			s.crashCount = 0
+			s.setStateLocked(StateOffline)
+			s.mu.Unlock()
+			_ = s.persistState()
+			return nil
+		}
 		if state == StateOffline || state == StateCrashed {
 			return util.NewErr(409, "PowerActionConflict", "server is not running")
 		}

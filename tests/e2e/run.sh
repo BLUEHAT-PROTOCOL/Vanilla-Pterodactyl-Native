@@ -273,6 +273,7 @@ WSOUT=$(timeout 40 node ws-client.mjs "ws://127.0.0.1:18080$(echo $WS_URL | sed 
 check "console: ws connected + console output" bash -c "echo '$WSOUT' | grep -q '\"connected\":true'"
 check "console: done-line detected (starting→running)" bash -c "echo '$WSOUT' | grep -q '\"doneLine\":true'"
 check "console: stats stream received" bash -c "echo '$WSOUT' | grep -q '\"stats\":true'"
+check "console: stdin command echo via ws" bash -c "echo '$WSOUT' | grep -q '\"stdinEcho\":true'"
 
 # ══ 4. file manager ═══════════════════════════════════════════════════════
 echo "── phase: file manager"
@@ -369,7 +370,25 @@ for i in $(seq 1 25); do
 done
 check "crash: crash detected (state=crashed)" test "$ST" = "crashed"
 
+# auto-restart: the daemon restarts the crashed server after its debounce.
+# The crashing app never reaches "running", so observe the crash budget
+# counter incrementing (crash_count) — proof the supervisor re-spawned it.
+C1=$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER_UUID | python3 -c "import json,sys; print(json.load(sys.stdin).get('crash_count',0))" 2>/dev/null)
+C2=$C1
+for i in $(seq 1 15); do
+  C2=$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER_UUID | python3 -c "import json,sys; print(json.load(sys.stdin).get('crash_count',0))" 2>/dev/null)
+  [ "${C2:-0}" -gt "${C1:-0}" ] 2>/dev/null && break
+  sleep 1
+done
+check "crash: auto-restart engaged (crash budget counting)" bash -c "[ '${C2:-0}' -gt '${C1:-0}' ] 2>/dev/null"
+
 curl -s -o /dev/null "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"signal": "kill"}'
+for i in $(seq 1 10); do
+  ST=$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER_UUID | python3 -c "import json,sys; print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
+  [ "$ST" = "offline" ] && break
+  sleep 1
+done
+check "power: kill accepted (offline after)" test "$ST" = "offline"
 
 # ══ 6. backups ═════════════════════════════════════════════════════════════
 echo "── phase: backups"
