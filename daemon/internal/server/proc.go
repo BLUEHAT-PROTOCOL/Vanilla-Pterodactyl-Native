@@ -46,7 +46,7 @@ func (s *Server) Start() error {
 	// egg compat: translate docker paths + {{VAR}} -> ${VAR}
 	interpolated := translatePlaceholders(eggPathTranslate(raw, vol))
 
-	env := s.BuildEnv()
+	env := s.buildEnvLocked()
 
 	uid, gid := s.resolveRunUser()
 	if s.log != nil {
@@ -159,11 +159,17 @@ func isValidVarName(s string) bool {
 	return true
 }
 
-// BuildEnv assembles the process environment.
+// BuildEnv assembles the process environment (lock-safe public wrapper).
 func (s *Server) BuildEnv() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.buildEnvLocked()
+}
 
+// buildEnvLocked assembles the environment; caller must already hold s.mu
+// (reading or writing). Do NOT acquire the lock here — Start() invokes this
+// while holding the write lock (double-RLock inside Lock self-deadlocks).
+func (s *Server) buildEnvLocked() []string {
 	envMap := s.Cfg.EnvStringMap()
 
 	def := s.Cfg.Settings.Allocations.Default

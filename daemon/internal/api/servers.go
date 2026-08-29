@@ -158,6 +158,11 @@ func (a *App) handleServerGet(w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"settings":              c.Settings,
 		"process_configuration": c.ProcessConfiguration,
+		// supervision state (wings exposes it through the list endpoint and
+		// the console; a superset here keeps parity tooling simple)
+		"state":     st.State,
+		"installed": st.Installed,
+		"suspended": c.Settings.Suspended,
 	})
 }
 
@@ -248,11 +253,22 @@ func (a *App) handlePower(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, err)
 		return
 	}
+	// Wings v1.15 sends {"signal":"start|stop|restart|kill"}; the legacy
+	// "state" alias is accepted for compatibility.
 	var body struct {
-		State string `json:"state"`
-		Wait  bool   `json:"wait"`
+		State  string `json:"state"`
+		Signal string `json:"signal"`
+		Wait   bool   `json:"wait"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || body.State == "" {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		util.WriteError(w, util.ErrBadRequest("invalid power body"))
+		return
+	}
+	action := body.State
+	if action == "" {
+		action = body.Signal
+	}
+	if action == "" {
 		util.WriteError(w, util.ErrBadRequest("missing power state"))
 		return
 	}
@@ -260,18 +276,18 @@ func (a *App) handlePower(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, util.ErrServerSuspended())
 		return
 	}
-	if err := s.Power(body.State); err != nil {
+	if err := s.Power(action); err != nil {
 		util.WriteError(w, err)
 		return
 	}
-	a.Log.Info("server %s power action: %s", s.UUID(), body.State)
+	a.Log.Info("server %s power action: %s", s.UUID(), action)
 
 	if body.Wait {
 		// wait up to 20s for the action to take effect
 		target := map[string]string{
 			"start": server.StateRunning, "stop": server.StateOffline,
 			"kill": server.StateOffline,
-		}[body.State]
+		}[action]
 		if target != "" {
 			deadline := time.Now().Add(20 * time.Second)
 			for time.Now().Before(deadline) {

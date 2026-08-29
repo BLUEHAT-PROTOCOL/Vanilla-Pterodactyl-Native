@@ -99,11 +99,18 @@ limits:
 debug: false
 EOF
 
+# stop any leftover panel/daemon processes (masters + php -S workers)
+pkill -f "artisan serve" 2>/dev/null || true
+pkill -f "php -S 127.0.0.1:8000" 2>/dev/null || true
+pkill -f "ptero-native --config" 2>/dev/null || true
+sleep 1
+pkill -9 -f "artisan serve" 2>/dev/null || true
+pkill -9 -f "php -S 127.0.0.1:8000" 2>/dev/null || true
+pkill -9 -f "ptero-native --config" 2>/dev/null || true
+
 # start panel (php artisan serve) — absolute artisan path, sandbox env neutralized
-pkill -f "artisan serve" 2>/dev/null; sleep 1
 ( cd "$PANEL_DIR" && env -u DATABASE_URL -u DB_URL PHP_CLI_SERVER_WORKERS=8 setsid "$PHP" "$PANEL_DIR/artisan" serve --no-reload --host=127.0.0.1 --port=8000 \
   > "$E2E_BASE/panel.log" 2>&1 < /dev/null & )
-disown
 # start daemon
 pkill -f "ptero-native --config" 2>/dev/null
 setsid "$DAEMON_DIR/bin/ptero-native" --config "$E2E_BASE/daemon-config.yml" \
@@ -170,7 +177,7 @@ check "egg: compat audit classifies nodejs egg" bash -c "echo '$AUDIT' | grep -q
 
 # runtime resolve
 RESOLVE=$(curl -s "${AUTH[@]}" "$PANEL_URL/api/application/runtime/resolve?image=ghcr.io/pterodactyl/yolks:nodejs_20")
-check "runtime: resolve maps yolks:nodejs_20" bash -c "echo '$RESOLVE' | grep -q '\"resolved\": true'"
+check "runtime: resolve maps yolks:nodejs_20" bash -c "echo '$RESOLVE' | grep -q '\"resolved\":true'"
 
 # ══ 2. server creation (pull model) ═══════════════════════════════════════
 echo "── phase: server create + install"
@@ -204,7 +211,9 @@ CREATE=$(curl -s -w '\n%{http_code}' "${AUTH[@]}" -X POST $PANEL_URL/api/applica
   }")
 CREATE_CODE=$(echo "$CREATE" | tail -1)
 SERVER_JSON=$(echo "$CREATE" | head -n -1)
-SERVER_UUID=$(echo "$SERVER_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['attributes']['identifier'])" 2>/dev/null)
+# NOTE: use the FULL uuid — the daemon routes key on the complete uuid, not the
+# 8-char identifier shown in the UI.
+SERVER_UUID=$(echo "$SERVER_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['attributes']['uuid'])" 2>/dev/null)
 check "server: created via application API (201)" test "$CREATE_CODE" = "201"
 check "server: uuid returned" test -n "$SERVER_UUID"
 
@@ -213,14 +222,15 @@ sleep 2
 DSRV=$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER_UUID)
 check "daemon: server registered (pull model)" bash -c "echo '$DSRV' | grep -q '\"uuid\"'"
 
-# wait for install to complete (daemon runs install script then callbacks)
+# wait for install to complete (daemon runs install script then callbacks).
+# Panel v1.15 contract: successful install => servers.status IS NULL.
 install_done() {
   local st
   st=$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers 2>/dev/null)
   # server state must be offline/running (not installing) AND panel shows installed
   if echo "$st" | grep -q "installing"; then return 1; fi
   curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER_UUID >/dev/null && \
-  "$MDBCTL" --socket="$MDB_SOCK" -uroot -e "SELECT status FROM panel.servers WHERE uuid='$SERVER_UUID'" 2>/dev/null | grep -q "^1$" && return 0
+  "$MDBCTL" --socket="$MDB_SOCK" -uroot -e "SELECT status FROM panel.servers WHERE uuid='$SERVER_UUID'" 2>/dev/null | grep -q '^NULL$' && return 0
   return 1
 }
 for i in $(seq 1 60); do install_done && break; sleep 1; done
@@ -238,7 +248,7 @@ curl -s -o /dev/null "${DAUTH[@]}" -X POST "$DAEMON_URL/api/servers/$SERVER_UUID
 
 # start via panel client API (panel → daemon power)
 START_CODE=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X POST \
-  $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"state": "start"}')
+  $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"signal": "start"}')
 check "power: start accepted (202 via panel)" test "$START_CODE" = "202"
 
 # websocket via panel-issued token
@@ -326,12 +336,12 @@ echo "── phase: power lifecycle"
 STATE_NOW=$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER_UUID | python3 -c "import json,sys; print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
 check "power: server running" test "$STATE_NOW" = "running"
 
-curl -s -o /dev/null "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"state": "stop"}'
+curl -s -o /dev/null "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"signal": "stop"}'
 stopped() { [ "$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER_UUID | python3 -c "import json,sys; print(json.load(sys.stdin).get('state',''))" 2>/dev/null)" = "offline" ]; }
 for i in $(seq 1 20); do stopped && break; sleep 1; done
 check "power: graceful stop (egg stop command)" stopped
 
-curl -s -o /dev/null "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"state": "start"}'
+curl -s -o /dev/null "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"signal": "start"}'
 running() { [ "$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER_UUID | python3 -c "import json,sys; print(json.load(sys.stdin).get('state',''))" 2>/dev/null)" = "running" ] || [ "$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER_UUID | python3 -c "import json,sys; print(json.load(sys.stdin).get('state',''))" 2>/dev/null)" = "starting" ]; }
 for i in $(seq 1 20); do running && break; sleep 1; done
 check "power: start again" running
@@ -339,7 +349,7 @@ check "power: start again" running
 # crash detection: replace index.js with an instantly-crashing script
 curl -s -o /dev/null "${DAUTH[@]}" -X POST "$DAEMON_URL/api/servers/$SERVER_UUID/files/write?file=%2Findex.js" \
   -H 'Content-Type: text/plain' --data-binary 'process.exit(2);'
-curl -s -o /dev/null "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"state": "restart"}'
+curl -s -o /dev/null "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"signal": "restart"}'
 for i in $(seq 1 25); do
   ST=$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER_UUID | python3 -c "import json,sys; print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
   [ "$ST" = "crashed" ] && break
@@ -347,7 +357,7 @@ for i in $(seq 1 25); do
 done
 check "crash: crash detected (state=crashed)" test "$ST" = "crashed"
 
-curl -s -o /dev/null "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"state": "kill"}'
+curl -s -o /dev/null "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"signal": "kill"}'
 
 # ══ 6. backups ═════════════════════════════════════════════════════════════
 echo "── phase: backups"
@@ -401,18 +411,22 @@ check "schedule: task created (201)" test "$TASK_CODE" = "201"
 
 # ══ 8. restart panel + daemon ═══════════════════════════════════════════════
 echo "── phase: restarts"
-# panel restart — absolute artisan path, sandbox env neutralized
-pkill -f "artisan serve" 2>/dev/null; sleep 1
+# panel restart — full kill (masters + php -S workers) then fresh start
+pkill -f "artisan serve" 2>/dev/null || true
+pkill -f "php -S 127.0.0.1:8000" 2>/dev/null || true
+sleep 1
+pkill -9 -f "artisan serve" 2>/dev/null || true
+pkill -9 -f "php -S 127.0.0.1:8000" 2>/dev/null || true
 ( cd "$PANEL_DIR" && env -u DATABASE_URL -u DB_URL PHP_CLI_SERVER_WORKERS=8 setsid "$PHP" "$PANEL_DIR/artisan" serve --no-reload --host=127.0.0.1 --port=8000 > "$E2E_BASE/panel.log" 2>&1 < /dev/null & )
-disown
-for i in $(seq 1 20); do curl -s -o /dev/null $PANEL_URL && break; sleep 1; done
+for i in $(seq 1 20); do curl -s -o /dev/null -w '' "$PANEL_URL" && break; sleep 1; done
 check "restart: panel back up" curl -s -o /dev/null $PANEL_URL
 check "restart: panel API still authorized" bash -c "curl -s -o /dev/null -w '%{http_code}' \"${AUTH[@]}\" $PANEL_URL/api/application/servers | grep -q 200"
 
 # daemon restart (server running should be re-adopted)
-curl -s -o /dev/null "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"state": "start"}'
+curl -s -o /dev/null "${AUTH[@]}" -X POST $PANEL_URL/api/client/servers/$SERVER_UUID/power -H 'Content-Type: application/json' -d '{"signal": "start"}'
 for i in $(seq 1 20); do running && break; sleep 1; done
-pkill -f "ptero-native --config" 2>/dev/null; sleep 1
+pkill -f "ptero-native --config" 2>/dev/null || true; sleep 1
+pkill -9 -f "ptero-native --config" 2>/dev/null || true
 setsid "$DAEMON_DIR/bin/ptero-native" --config "$E2E_BASE/daemon-config.yml" > "$E2E_BASE/daemon.log" 2>&1 < /dev/null &
 disown
 for i in $(seq 1 20); do curl -s -o /dev/null "${DAUTH[@]}" $DAEMON_URL/api/system && break; sleep 1; done

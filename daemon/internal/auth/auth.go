@@ -19,13 +19,26 @@ type TokenSource interface {
 	APIKeys() map[string]string
 }
 
-// CheckBearer validates an "Authorization: Bearer <id>.<key>" header.
+// CheckBearer validates an "Authorization: Bearer ..." header. Two shapes are
+// accepted (wings v1.15 parity):
+//   - "Bearer <plain token>"  — what the official Panel's DaemonRepository sends
+//   - "Bearer <id>.<key>"     — legacy pair form (daemon callback parity)
 func CheckBearer(r *http.Request, keys map[string]string) bool {
 	h := r.Header.Get("Authorization")
 	if h == "" || !strings.HasPrefix(h, "Bearer ") {
 		return false
 	}
 	token := strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
+	if token == "" {
+		return false
+	}
+	// plain-token form: compare against every configured key value.
+	for _, v := range keys {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(v)) == 1 {
+			return true
+		}
+	}
+	// id-key pair form.
 	id, key, ok := strings.Cut(token, ".")
 	if !ok || id == "" || key == "" {
 		return false
