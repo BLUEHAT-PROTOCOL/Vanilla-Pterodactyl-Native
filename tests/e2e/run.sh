@@ -188,6 +188,11 @@ check "egg: compat audit classifies nodejs egg" bash -c "echo '$AUDIT' | grep -q
 # runtime resolve
 RESOLVE=$(curl -s "${AUTH[@]}" "$PANEL_URL/api/application/runtime/resolve?image=ghcr.io/pterodactyl/yolks:nodejs_20")
 check "runtime: resolve maps yolks:nodejs_20" bash -c "echo '$RESOLVE' | grep -q '\"resolved\":true'"
+RESOLVE24=$(curl -s "${AUTH[@]}" "$PANEL_URL/api/application/runtime/resolve?image=ghcr.io/pterodactyl/yolks:nodejs_24")
+check "runtime: resolve maps yolks:nodejs_24" bash -c "echo '$RESOLVE24' | grep -q '\"resolved\":true'"
+PROFILES=$(curl -s "${AUTH[@]}" "$PANEL_URL/api/application/runtime/profiles")
+check "runtime: node24 profile present" bash -c "echo '$PROFILES' | grep -q '\"node24\"'"
+check "runtime: node24 binary valid" bash -c "command -v node >/dev/null && node --version | grep -qE '^v24\.'"
 
 # ══ 2. server creation (pull model) ═══════════════════════════════════════
 echo "── phase: server create + install"
@@ -468,6 +473,68 @@ check "restart: daemon recovered + server re-adopted/registered" bash -c "[ \"$D
 echo "── phase: allocations"
 ALLOCS_JSON=$(curl -s "${AUTH[@]}" $PANEL_URL/api/client/servers/$SERVER_UUID)
 check "allocations: server has default allocation" bash -c "echo '$ALLOCS_JSON' | grep -q 'allocation'"
+
+# ══ 10. Node 24 end-to-end (profile+mapping+create+install+start+stop) ════
+echo "── phase: node24 runtime"
+ALLOC24_ID=$(curl -s "${AUTH[@]}" $PANEL_URL/api/application/nodes/$NODE_ID/allocations | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d['data'][1]['attributes']['id'])")
+CREATE24=$(curl -s -w '\n%{http_code}' "${AUTH[@]}" -X POST $PANEL_URL/api/application/servers \
+  -H 'Content-Type: application/json' \
+  -d "{
+    \"name\": \"E2E Node24 Server\",
+    \"user\": $ADMIN_ID,
+    \"egg\": $NODEJS_EGG_ID,
+    \"docker_image\": \"ghcr.io/pterodactyl/yolks:nodejs_24\",
+    \"startup\": \"node /home/container/{{SERVER_FILE}}\",
+    \"environment\": {\"SERVER_FILE\": \"index.js\"},
+    \"allocation\": {\"default\": $ALLOC24_ID},
+    \"limits\": {\"memory\": 256, \"swap\": 0, \"disk\": 1024, \"io\": 500, \"cpu\": 0, \"threads\": null},
+    \"feature_limits\": {\"databases\": 0, \"allocations\": 2, \"backups\": 5},
+    \"start_on_completion\": false
+  }")
+CREATE24_CODE=$(echo "$CREATE24" | tail -1)
+SERVER24_UUID=$(echo "$CREATE24" | head -n -1 | python3 -c "import json,sys; print(json.load(sys.stdin)['attributes']['uuid'])" 2>/dev/null)
+check "node24: server created via application API (201)" test "$CREATE24_CODE" = "201"
+check "node24: uuid returned" test -n "$SERVER24_UUID"
+
+sleep 2
+DSRV24=$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER24_UUID)
+check "node24: daemon registered server" bash -c "echo '$DSRV24' | grep -q '\"uuid\"'"
+
+install_done_for() {
+  local u="$1" st
+  st=$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers 2>/dev/null)
+  if echo "$st" | grep -q "installing"; then return 1; fi
+  "$MDBCTL" --socket="$MDB_SOCK" -uroot -e "SELECT status FROM panel.servers WHERE uuid='$u'" 2>/dev/null | grep -q '^NULL$' && return 0
+  return 1
+}
+for i in $(seq 1 60); do install_done_for "$SERVER24_UUID" && break; sleep 1; done
+check "node24: native install completed + panel callback" install_done_for "$SERVER24_UUID"
+
+curl -s -o /dev/null "${DAUTH[@]}" -X POST "$DAEMON_URL/api/servers/$SERVER24_UUID/files/write?file=%2Findex.js" \
+  -H 'Content-Type: text/plain' --data-binary 'console.log("node24-ready"); setInterval(function(){}, 1000);'
+ST24_CODE=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X POST \
+  $PANEL_URL/api/client/servers/$SERVER24_UUID/power -H 'Content-Type: application/json' -d '{"signal": "start"}')
+check "node24: start accepted (204 via panel)" test "$ST24_CODE" = "204"
+ST24=""
+for i in $(seq 1 30); do
+  ST24=$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER24_UUID | python3 -c "import json,sys; print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
+  [ "$ST24" = "running" ] && break
+  sleep 1
+done
+check "node24: state running" test "$ST24" = "running"
+STOP24_CODE=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X POST \
+  $PANEL_URL/api/client/servers/$SERVER24_UUID/power -H 'Content-Type: application/json' -d '{"signal": "stop"}')
+check "node24: stop accepted (204)" test "$STOP24_CODE" = "204"
+ST24=""
+for i in $(seq 1 30); do
+  ST24=$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER24_UUID | python3 -c "import json,sys; print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
+  [ "$ST24" = "offline" ] && break
+  sleep 1
+done
+check "node24: state offline after stop" test "$ST24" = "offline"
 
 # ══ summary ═══════════════════════════════════════════════════════════════
 echo "════════════════════════════════════════════════════════"

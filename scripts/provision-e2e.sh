@@ -41,7 +41,7 @@ echo "== [3/5] Composer =="
 if [ ! -x "$TC/bin/composer" ]; then
   curl -sS --max-time 30 https://getcomposer.org/installer -o "$DL/composer-setup.php"
   "$TC/php/php" "$DL/composer-setup.php" --quiet --install-dir="$TC/bin" --filename=composer.phar
-  printf '#!/usr/bin/env bash\nexec %s/php %s/bin/composer.phar "$@"\n' "$TC" "$TC" > "$TC/bin/composer"
+  printf '#!/usr/bin/env bash\nexec %s/php/php %s/bin/composer.phar "$@"\n' "$TC" "$TC" > "$TC/bin/composer"
   chmod +x "$TC/bin/composer"
 fi
 "$TC/bin/composer" --version 2>/dev/null | head -1
@@ -49,13 +49,19 @@ fi
 echo "== [4/5] libaio (mariadbd dependency) =="
 if [ ! -e "$DL/usr/lib/x86_64-linux-gnu/libaio.so.1" ]; then
   for deb in \
-    "http://archive.ubuntu.com/ubuntu/pool/main/liba/libaio/libaio1t64_0.3.113-4_amd64.deb" \
+    "http://archive.ubuntu.com/ubuntu/pool/main/liba/libaio/libaio1t64_0.3.113-8build1_amd64.deb" \
+    "http://archive.ubuntu.com/ubuntu/pool/main/liba/libaio/libaio1t64_0.3.113-6build1_amd64.deb" \
     "http://archive.ubuntu.com/ubuntu/pool/main/liba/libaio/libaio1_0.3.112-13build1_amd64.deb"; do
-    curl -sL --max-time 30 -o "$DL/libaio.deb" "$deb" && break
+    curl -sL --max-time 30 -o "$DL/libaio.deb" "$deb"
+    if dpkg-deb -I "$DL/libaio.deb" >/dev/null 2>&1; then break; fi
+    echo "unusable mirror artifact: $deb"
   done
   ( cd "$DL" && dpkg-deb -x libaio.deb debroot 2>/dev/null || \
     (ar x libaio.deb && mkdir -p debroot && tar -C debroot -xf data.tar.*) )
   find "$DL/debroot" -name 'libaio.so*' -exec cp -a {} "$DL/usr/lib/x86_64-linux-gnu/" \;
+  # t64 builds ship libaio.so.1t64 only; mariadbd links libaio.so.1
+  [ -e "$DL/usr/lib/x86_64-linux-gnu/libaio.so.1" ] || \
+    ln -s libaio.so.1t64 "$DL/usr/lib/x86_64-linux-gnu/libaio.so.1"
 fi
 ls "$DL/usr/lib/x86_64-linux-gnu/" | head -2
 
