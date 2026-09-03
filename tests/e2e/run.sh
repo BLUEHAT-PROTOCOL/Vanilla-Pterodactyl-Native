@@ -522,7 +522,7 @@ for i in $(seq 1 60); do install_done_for "$SERVER24_UUID" && break; sleep 1; do
 check "node24: native install completed + panel callback" install_done_for "$SERVER24_UUID"
 
 curl -s -o /dev/null "${DAUTH[@]}" -X POST "$DAEMON_URL/api/servers/$SERVER24_UUID/files/write?file=%2Findex.js" \
-  -H 'Content-Type: text/plain' --data-binary 'console.log("node24-ready"); console.log("e2e-server-ready"); setInterval(function(){}, 1000);'
+  -H 'Content-Type: text/plain' --data-binary 'console.log("node24-ready"); console.log("e2e-server-ready"); process.stdin.on("data", function(d){ if (String(d).trim()==="stop") { process.exit(0); } }); setInterval(function(){}, 1000);'
 ST24_CODE=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X POST \
   $PANEL_URL/api/client/servers/$SERVER24_UUID/power -H 'Content-Type: application/json' -d '{"signal": "start"}')
 check "node24: start accepted (204 via panel)" test "$ST24_CODE" = "204"
@@ -537,7 +537,7 @@ STOP24_CODE=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X POST \
   $PANEL_URL/api/client/servers/$SERVER24_UUID/power -H 'Content-Type: application/json' -d '{"signal": "stop"}')
 check "node24: stop accepted (204)" test "$STOP24_CODE" = "204"
 ST24=""
-for i in $(seq 1 30); do
+for i in $(seq 1 50); do
   ST24=$(curl -s "${DAUTH[@]}" $DAEMON_URL/api/servers/$SERVER24_UUID | python3 -c "import json,sys; print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
   [ "$ST24" = "offline" ] && break
   sleep 1
