@@ -32,6 +32,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
  * @property int $r_eggs
  * @property int $r_database_hosts
  * @property int $r_server_databases
+ * @property int $r_runtime
  * @property User $tokenable
  * @property User $user
  *
@@ -116,6 +117,7 @@ class ApiKey extends Model implements HasAbilities
         'r_' . AdminAcl::RESOURCE_NESTS => 'int',
         'r_' . AdminAcl::RESOURCE_NODES => 'int',
         'r_' . AdminAcl::RESOURCE_SERVERS => 'int',
+        'r_' . AdminAcl::RESOURCE_RUNTIME => 'int',
     ];
 
     /**
@@ -158,6 +160,7 @@ class ApiKey extends Model implements HasAbilities
         'r_' . AdminAcl::RESOURCE_NESTS => 'integer|min:0|max:3',
         'r_' . AdminAcl::RESOURCE_NODES => 'integer|min:0|max:3',
         'r_' . AdminAcl::RESOURCE_SERVERS => 'integer|min:0|max:3',
+        'r_' . AdminAcl::RESOURCE_RUNTIME => 'integer|min:0|max:3',
     ];
 
     public function can($ability)

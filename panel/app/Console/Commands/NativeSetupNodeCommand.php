@@ -3,7 +3,6 @@
 namespace Pterodactyl\Console\Commands;
 
 use Illuminate\Console\Command;
-use Illuminate\Support\Str;
 use Pterodactyl\Models\Allocation;
 use Pterodactyl\Models\Node;
 use Pterodactyl\Services\Nodes\NodeCreationService;
@@ -52,6 +51,8 @@ class NativeSetupNodeCommand extends Command
 
         [$portStart, $portEnd] = array_map('intval', explode('-', $ports) + [null, null]);
 
+        // NodeCreationService::handle() generates uuid, daemon_token and
+        // daemon_token_id itself — never craft daemon credentials manually here.
         $data = [
             'public' => true,
             'name' => $name,
@@ -64,15 +65,13 @@ class NativeSetupNodeCommand extends Command
             'disk' => 0,
             'disk_overallocate' => 0,
             'upload_size' => 100,
-            'daemon_listen' => $listen,
-            'daemon_sftp' => 2022,
-            'daemon_base' => '/var/lib/ptero-native/volumes',
-            'daemon_token_id' => Str::random(16),
-            'daemon_token' => Str::random(32),
+            'daemonListen' => $listen,
+            'daemonSFTP' => 2022,
+            'daemonBase' => '/var/lib/ptero-native/volumes',
         ];
 
         try {
-            $node = $creationService->create($data);
+            $node = $creationService->handle($data);
         } catch (\Throwable $e) {
             $this->error('Node creation failed: ' . $e->getMessage());
 
