@@ -50,7 +50,29 @@ sudo bash install.sh --daemon-only
    * supervisor: `cp scripts/supervisor/ptero-native.conf /etc/supervisor/conf.d/`
    * runit: `cp -r scripts/runit/ptero-native /etc/service/`
 
-### 2.4 Connect panel ↔ daemon
+### 2.4 Panel + daemon services without systemd (NAT VPS / containers)
+The panel stack (MariaDB, PHP-FPM, nginx) and the daemon must survive a
+container restart even where systemd is not PID 1 and `policy-rc.d` blocks
+auto-start. The installer handles this automatically at install time, and for
+reboot persistence pick **one** of:
+
+* **runit (recommended in minimal containers)** — create
+  `/etc/service/ptero-panel/run` that execs `mariadbd-safe`, `php-fpm8.3 -F`
+  and `nginx -g 'daemon off;'` (or use per-service run dirs), plus the
+  bundled `scripts/runit/ptero-native` for the daemon.
+* **supervisor** — unit files for the daemon ship in `scripts/supervisor/`;
+  add analogous programs for `mariadbd-safe` / `php-fpm` / `nginx`.
+* **pm2** — can also wrap the daemon (`pm2 start ... `) and any service with
+  an interpreter (`pm2 start "nginx -g 'daemon off;'"`).
+* **plain nohup/rc.local** — last resort: append the direct-start commands to
+  `/etc/rc.local` (see `install.sh` helpers `start_mariadb`, `start_php_fpm`,
+  `start_nginx` for the exact invocations used).
+
+After any reboot verify in order: MariaDB ready (`mysqladmin ping`), PHP-FPM
+socket (`/run/php/php8.3-fpm.sock`), nginx serving HTTP 200, daemon
+`/api/system` answering with its token.
+
+### 2.5 Connect panel ↔ daemon
 1. `php artisan p:native:setup-node --fqdn=<panel-host> --listen=8080 --ports=20200-20250`
 2. Copy the printed block into `/etc/ptero-native/config.yml`.
 3. Restart the daemon; the node must show as online in the admin area.

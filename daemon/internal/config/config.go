@@ -27,6 +27,11 @@ type DaemonConfig struct {
 	TmpPath        string            `yaml:"tmp_path"`
 	UsernamePrefix string            `yaml:"username_prefix"`
 	UploadLimitMB  int64             `yaml:"upload_size_limit"`
+	// CORSAllowedOrigins lists extra browser origins (panel public URL,
+	// tunnel hostname, ...) allowed to call browser-facing daemon endpoints
+	// such as multipart upload. Empty = only panel.url is allowed. Never
+	// treated as a wildcard.
+	CORSAllowedOrigins []string `yaml:"cors_allowed_origins"`
 }
 
 // LimitsConfig holds crash/log behavior.

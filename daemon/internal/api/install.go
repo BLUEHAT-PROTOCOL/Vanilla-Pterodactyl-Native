@@ -125,6 +125,12 @@ func (a *App) runInstall(ctx context.Context, s *server.Server, job *installJob,
 	cmd.Dir = vol
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Installers must never run as root: a root-run `npm install` leaves
+	// root-owned node_modules behind and the server user then hits EACCES
+	// at startup (§13). Same credential pattern as the runtime process.
+	if uid, gid := s.ResolveRunUser(); uid >= 0 && gid >= 0 {
+		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

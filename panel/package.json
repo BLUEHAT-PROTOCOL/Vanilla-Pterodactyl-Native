@@ -131,12 +131,13 @@
     },
     "scripts": {
         "clean": "cd public/assets && find . \\( -name \"*.js\" -o -name \"*.map\" \\) -type f -delete",
+        "copy-static-assets": "mkdir -p public/assets/svgs && cp resources/scripts/assets/images/pterodactyl.svg public/assets/svgs/pterodactyl.svg",
         "test": "jest",
         "tsc": "tsc --noEmit",
         "lint": "eslint ./resources/scripts/**/*.{ts,tsx} --ext .ts,.tsx",
         "watch": "cross-env NODE_ENV=development ./node_modules/.bin/webpack --watch --progress",
-        "build": "cross-env NODE_ENV=development ./node_modules/.bin/webpack --progress",
-        "build:production": "yarn run clean && cross-env NODE_ENV=production ./node_modules/.bin/webpack --mode production",
+        "build": "yarn run copy-static-assets && cross-env NODE_ENV=development ./node_modules/.bin/webpack --progress",
+        "build:production": "yarn run copy-static-assets && yarn run clean && cross-env NODE_ENV=production ./node_modules/.bin/webpack --mode production",
         "serve": "yarn run clean && cross-env NODE_ENV=development USE_LOCAL_CERTS=true WEBPACK_PUBLIC_PATH=https://pterodactyl.test:5173/ webpack serve --progress --hot --server-type https"
     },
     "browserslist": [

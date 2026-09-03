@@ -91,6 +91,23 @@ func (s *Server) Start() error {
 	go s.pumpOutput(stderr)
 	go s.supervise(cmd)
 
+	// State must follow the real process lifecycle: when the egg defines no
+	// done markers, a process that stays alive past a short stabilization
+	// window is Running — never stuck in "starting" forever (§11).
+	if len(s.Cfg.ProcessConfiguration.Startup.Done) == 0 {
+		go func(uuid string, pid int) {
+			time.Sleep(1500 * time.Millisecond)
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if s.state == StateStarting && s.pid == pid && processAlive(pid) {
+				s.state = StateRunning
+				if s.hub != nil {
+					go s.hub.StatusChange(uuid, StateRunning)
+				}
+			}
+		}(s.Cfg.UUID(), cmd.Process.Pid)
+	}
+
 	_ = s.persistState()
 	return nil
 }
@@ -249,6 +266,11 @@ func (s *Server) resolveRunUser() (int, int) {
 	}
 	return u.uid, u.gid
 }
+
+// ResolveRunUser exposes the uid/gid the server's processes should run as
+// (-1/-1 when the daemon itself is not root). The install layer uses it to
+// keep installers off the root account (§13).
+func (s *Server) ResolveRunUser() (int, int) { return s.resolveRunUser() }
 
 // pumpOutput reads a pipe into the ring buffer + hub, detecting done lines.
 func (s *Server) pumpOutput(r interface{ Read([]byte) (int, error) }) {
@@ -424,10 +446,9 @@ func (s *Server) stop(kill bool) error {
 			_, _ = fmt.Fprintln(pipe, stopCfg.Value)
 		}
 	} else if stopCfg.Type == "signal" && stopCfg.Value != "" {
-		sig := parseSignal(stopCfg.Value)
-		if sig != 0 {
-			_ = signalGroup(pid, sig)
-		}
+		// parseSignal always resolves (unknown names -> SIGTERM), so the
+		// stop request can never be silently skipped.
+		_ = signalGroup(pid, parseSignal(stopCfg.Value))
 	} else {
 		// default: wings-style SIGSTOP then SIGTERM
 		_ = signalGroup(pid, syscall.SIGSTOP)
@@ -454,19 +475,26 @@ func (s *Server) stop(kill bool) error {
 }
 
 // parseSignal maps a signal name to a syscall signal.
+//
+// Eggs commonly express the stop signal as "^C" (or "C" after the caret is
+// stripped downstream); both MUST resolve to SIGINT or stop/restart of those
+// eggs silently does nothing. Unknown names fall back to SIGTERM instead of
+// returning 0 so the caller never skips signaling entirely.
 func parseSignal(name string) syscall.Signal {
+	n := strings.ToUpper(strings.TrimSpace(name))
+	n = strings.TrimPrefix(n, "^") // "^C" -> "C"
 	signals := map[string]syscall.Signal{
 		"SIGKILL": syscall.SIGKILL, "KILL": syscall.SIGKILL,
 		"SIGTERM": syscall.SIGTERM, "TERM": syscall.SIGTERM,
-		"SIGINT": syscall.SIGINT, "INT": syscall.SIGINT,
+		"SIGINT": syscall.SIGINT, "INT": syscall.SIGINT, "C": syscall.SIGINT,
 		"SIGHUP": syscall.SIGHUP, "HUP": syscall.SIGHUP,
 		"SIGSTOP": syscall.SIGSTOP, "STOP": syscall.SIGSTOP,
 		"SIGQUIT": syscall.SIGQUIT, "QUIT": syscall.SIGQUIT,
 	}
-	if sig, ok := signals[strings.ToUpper(strings.TrimSpace(name))]; ok {
+	if sig, ok := signals[n]; ok {
 		return sig
 	}
-	return 0
+	return syscall.SIGTERM
 }
 
 // signalGroup signals a whole process group.

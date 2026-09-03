@@ -1,42 +1,44 @@
 {
-    "_comment": "Generated for Vanilla Pterodactyl Native E2E",
-    "meta": {
-        "version": "PTDL_v2",
-        "update_url": null
-    },
-    "exported_at": "2026-08-29T00:00:00+00:00",
-    "name": "Node.js E2E",
-    "author": "e2e@vanilla-native.local",
-    "description": "Generic Node.js application (E2E test egg)",
-    "features": null,
-    "docker_images": {
-        "Node 20": "ghcr.io/pterodactyl/yolks:nodejs_20"
-    },
-    "file_denylist": [],
-    "startup": "node /home/container/{{SERVER_FILE}}",
-    "config": {
-        "files": "{}",
-        "startup": "{\"done\": \"e2e-server-ready\", \"user_interaction\": [], \"strip_ansi\": false}",
-        "logs": "{}",
-        "stop": "stop"
-    },
-    "scripts": {
-        "installation": {
-            "script": "#!/bin/bash\necho 'node install: nothing to do'\nexit 0",
-            "container": "ghcr.io/pterodactyl/installers:alpine",
-            "entrypoint": "/bin/ash"
-        }
-    },
-    "variables": [
-        {
-            "name": "Server File",
-            "description": "The JS entry file",
-            "env_variable": "SERVER_FILE",
-            "default_value": "index.js",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|string|max:120",
-            "field_type": "text"
-        }
-    ]
+  "_comment": "Generated for Vanilla Pterodactyl Native E2E",
+  "meta": {
+    "version": "PTDL_v2",
+    "update_url": null
+  },
+  "exported_at": "2026-08-29T00:00:00+00:00",
+  "name": "Node.js E2E",
+  "author": "e2e@vanilla-native.local",
+  "description": "Generic Node.js application (E2E test egg)",
+  "features": null,
+  "docker_images": {
+    "Node 20": "ghcr.io/pterodactyl/yolks:nodejs_20",
+    "Node 22": "ghcr.io/pterodactyl/yolks:nodejs_22",
+    "Node 24": "ghcr.io/pterodactyl/yolks:nodejs_24"
+  },
+  "file_denylist": [],
+  "startup": "node /home/container/{{SERVER_FILE}}",
+  "config": {
+    "files": "{}",
+    "startup": "{\"done\": \"e2e-server-ready\", \"user_interaction\": [], \"strip_ansi\": false}",
+    "logs": "{}",
+    "stop": "stop"
+  },
+  "scripts": {
+    "installation": {
+      "script": "#!/bin/bash\necho 'node install: nothing to do'\nexit 0",
+      "container": "ghcr.io/pterodactyl/installers:alpine",
+      "entrypoint": "/bin/ash"
+    }
+  },
+  "variables": [
+    {
+      "name": "Server File",
+      "description": "The JS entry file",
+      "env_variable": "SERVER_FILE",
+      "default_value": "index.js",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:120",
+      "field_type": "text"
+    }
+  ]
 }

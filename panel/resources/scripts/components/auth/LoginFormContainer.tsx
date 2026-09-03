@@ -3,6 +3,7 @@ import { Form } from 'formik';
 import styled from 'styled-components/macro';
 import { breakpoint } from '@/theme';
 import FlashMessageRender from '@/components/FlashMessageRender';
+import { useStoreState } from 'easy-peasy';
 import tw from 'twin.macro';
 
 type Props = React.DetailedHTMLProps<React.FormHTMLAttributes<HTMLFormElement>, HTMLFormElement> & {
@@ -28,14 +29,17 @@ const Container = styled.div`
     `};
 `;
 
-export default forwardRef<HTMLFormElement, Props>(({ title, ...props }, ref) => (
+export default forwardRef<HTMLFormElement, Props>(({ title, ...props }, ref) => {
+    const logoUrl = useStoreState((state) => state.settings.data?.branding?.logoUrl) || '/assets/svgs/pterodactyl.svg';
+
+    return (
     <Container>
         {title && <h2 css={tw`text-3xl text-center text-neutral-100 font-medium py-4`}>{title}</h2>}
         <FlashMessageRender css={tw`mb-2 px-1`} />
         <Form {...props} ref={ref}>
             <div css={tw`md:flex w-full bg-white shadow-lg rounded-lg p-6 md:pl-0 mx-1`}>
                 <div css={tw`flex-none select-none mb-6 md:mb-0 self-center`}>
-                    <img src={'/assets/svgs/pterodactyl.svg'} css={tw`block w-48 md:w-64 mx-auto`} />
+                    <img src={logoUrl} css={tw`block w-48 md:w-64 mx-auto`} />
                 </div>
                 <div css={tw`flex-1`}>{props.children}</div>
             </div>
@@ -52,4 +56,5 @@ export default forwardRef<HTMLFormElement, Props>(({ title, ...props }, ref) => 
             </a>
         </p>
     </Container>
-));
+    );
+});

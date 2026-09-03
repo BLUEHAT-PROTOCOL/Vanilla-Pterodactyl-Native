@@ -3,6 +3,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 
 	"ptero-native/internal/auth"
@@ -157,7 +158,75 @@ func (a *App) Router() http.Handler {
 		util.WriteError(w, util.NewErr(http.StatusBadRequest, "TransferNotSupportedException", "transfers are not supported by the native runtime"))
 	}))
 
-	return a.recoverMiddleware(mux)
+	return a.recoverMiddleware(a.corsMiddleware(mux))
+}
+
+// corsAllowedOrigins returns the normalized origin allowlist: the panel URL
+// (browser-visible base) plus any explicitly configured extra origins.
+// There is intentionally no wildcard option (§12).
+func (a *App) corsAllowedOrigins() []string {
+	origins := []string{normalizeOrigin(a.Cfg.Panel.URL)}
+	for _, o := range a.Cfg.Daemon.CORSAllowedOrigins {
+		if n := normalizeOrigin(o); n != "" {
+			origins = append(origins, n)
+		}
+	}
+	return origins
+}
+
+// normalizeOrigin strips any path/trailing slash so URL and Origin compare cleanly.
+func normalizeOrigin(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if i := indexSlashAfterScheme(raw); i >= 0 {
+		if j := indexByte(raw[i:], '/'); j >= 0 {
+			raw = raw[:i+j]
+		}
+	}
+	return strings.TrimSuffix(raw, "/")
+}
+
+func indexSlashAfterScheme(s string) int {
+	i := strings.Index(s, "://")
+	if i < 0 {
+		return -1
+	}
+	return i + 3
+}
+
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}
+
+// corsMiddleware implements strict-allowlist CORS for browser-facing flows
+// (signed uploads/downloads). Preflight OPTIONS is answered here; no `*`.
+func (a *App) corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			for _, allowed := range a.corsAllowedOrigins() {
+				if strings.EqualFold(origin, allowed) {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Add("Vary", "Origin")
+					w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+					w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+					w.Header().Set("Access-Control-Max-Age", "600")
+					break
+				}
+			}
+		}
+		if r.Method == http.MethodOptions && origin != "" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleWSRoute delegates to the console hub if attached.

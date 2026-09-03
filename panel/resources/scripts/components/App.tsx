@@ -5,6 +5,8 @@ import { StoreProvider } from 'easy-peasy';
 import { store } from '@/state';
 import { SiteSettings } from '@/state/settings';
 import ProgressBar from '@/components/elements/ProgressBar';
+import BrandingBackground from '@/components/BrandingBackground';
+import BrandingMusic from '@/components/BrandingMusic';
 import { NotFound } from '@/components/elements/ScreenBlock';
 import tw from 'twin.macro';
 import GlobalStylesheet from '@/assets/css/GlobalStylesheet';
@@ -60,8 +62,10 @@ const App = () => {
         <>
             <GlobalStylesheet />
             <StoreProvider store={store}>
+                <BrandingBackground />
                 <ProgressBar />
-                <div css={tw`mx-auto w-auto`}>
+                <BrandingMusic />
+                <div css={tw`relative mx-auto w-auto`}>
                     <Router history={history}>
                         <Switch>
                             <Route path={'/auth'}>

@@ -363,12 +363,13 @@ func (r *Registry) LoadState() {
 			continue
 		}
 		s := &Server{
-			Cfg:        st.Config,
-			state:      StateOffline,
-			log:        r.log,
-			cfg:        r.cfg,
-			hub:        r.hub,
-			crashCount: st.CrashCount,
+			Cfg:          st.Config,
+			state:        StateOffline,
+			log:          r.log,
+			cfg:          r.cfg,
+			hub:          r.hub,
+			crashCount:   st.CrashCount,
+			installedVal: st.Installed,
 		}
 		s.logs = NewRing(r.cfg.Limits.LogMaxLines)
 		r.servers[st.Config.Settings.UUID] = s
