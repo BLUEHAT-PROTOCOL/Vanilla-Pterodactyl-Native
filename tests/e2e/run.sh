@@ -103,10 +103,13 @@ EOF
 pkill -f "artisan serve" 2>/dev/null || true
 pkill -f "php -S 127.0.0.1:8000" 2>/dev/null || true
 pkill -f "ptero-native --config" 2>/dev/null || true
+# previous supervisor wrappers (marker env makes them unique + killable)
+pkill -f "PTERO_E2E_DAEMON_SUPERVISOR" 2>/dev/null || true
 sleep 1
 pkill -9 -f "artisan serve" 2>/dev/null || true
 pkill -9 -f "php -S 127.0.0.1:8000" 2>/dev/null || true
 pkill -9 -f "ptero-native --config" 2>/dev/null || true
+pkill -9 -f "PTERO_E2E_DAEMON_SUPERVISOR" 2>/dev/null || true
 
 # start panel (php artisan serve) — absolute artisan path, sandbox env neutralized.
 # NOTE: `setsid nohup ... & disown` at top level — a `( ... & )` subshell is NOT
@@ -115,9 +118,9 @@ setsid nohup bash -c "cd '$PANEL_DIR' && exec env -u DATABASE_URL -u DB_URL PHP_
   > "$E2E_BASE/panel.log" 2>&1 < /dev/null &
 disown 2>/dev/null || true
 # start daemon under a detached supervisor (auto-restarts if killed);
-# the wrapper + daemon both match the pkill pattern used to stop them.
+# the wrapper + daemon both match the pkill patterns used to stop them.
 start_daemon_supervisor() {
-  setsid nohup bash -c "while true; do '$DAEMON_DIR/bin/ptero-native' --config '$E2E_BASE/daemon-config.yml' >> '$E2E_BASE/daemon.log' 2>&1; echo '[supervisor] daemon exited, restarting in 1s' >> '$E2E_BASE/daemon.log'; sleep 1; done" > /dev/null 2>&1 < /dev/null &
+  setsid nohup env PTERO_E2E_DAEMON_SUPERVISOR=1 bash -c "while true; do '$DAEMON_DIR/bin/ptero-native' --config '$E2E_BASE/daemon-config.yml' >> '$E2E_BASE/daemon.log' 2>&1; echo '[supervisor] daemon exited, restarting in 1s' >> '$E2E_BASE/daemon.log'; sleep 1; done" > /dev/null 2>&1 < /dev/null &
   disown 2>/dev/null || true
 }
 
@@ -519,7 +522,7 @@ for i in $(seq 1 60); do install_done_for "$SERVER24_UUID" && break; sleep 1; do
 check "node24: native install completed + panel callback" install_done_for "$SERVER24_UUID"
 
 curl -s -o /dev/null "${DAUTH[@]}" -X POST "$DAEMON_URL/api/servers/$SERVER24_UUID/files/write?file=%2Findex.js" \
-  -H 'Content-Type: text/plain' --data-binary 'console.log("node24-ready"); setInterval(function(){}, 1000);'
+  -H 'Content-Type: text/plain' --data-binary 'console.log("node24-ready"); console.log("e2e-server-ready"); setInterval(function(){}, 1000);'
 ST24_CODE=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X POST \
   $PANEL_URL/api/client/servers/$SERVER24_UUID/power -H 'Content-Type: application/json' -d '{"signal": "start"}')
 check "node24: start accepted (204 via panel)" test "$ST24_CODE" = "204"
