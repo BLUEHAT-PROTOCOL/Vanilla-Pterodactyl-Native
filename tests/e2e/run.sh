@@ -108,9 +108,12 @@ pkill -9 -f "artisan serve" 2>/dev/null || true
 pkill -9 -f "php -S 127.0.0.1:8000" 2>/dev/null || true
 pkill -9 -f "ptero-native --config" 2>/dev/null || true
 
-# start panel (php artisan serve) — absolute artisan path, sandbox env neutralized
-( cd "$PANEL_DIR" && env -u DATABASE_URL -u DB_URL PHP_CLI_SERVER_WORKERS=8 setsid "$PHP" "$PANEL_DIR/artisan" serve --no-reload --host=127.0.0.1 --port=8000 \
-  > "$E2E_BASE/panel.log" 2>&1 < /dev/null & )
+# start panel (php artisan serve) — absolute artisan path, sandbox env neutralized.
+# NOTE: `setsid nohup ... & disown` at top level — a `( ... & )` subshell is NOT
+# guaranteed to detach in restricted sandboxes and can make the harness hang.
+setsid nohup bash -c "cd '$PANEL_DIR' && exec env -u DATABASE_URL -u DB_URL PHP_CLI_SERVER_WORKERS=8 '$PHP' '$PANEL_DIR/artisan' serve --no-reload --host=127.0.0.1 --port=8000" \
+  > "$E2E_BASE/panel.log" 2>&1 < /dev/null &
+disown 2>/dev/null || true
 # start daemon under a detached supervisor (auto-restarts if killed);
 # the wrapper + daemon both match the pkill pattern used to stop them.
 start_daemon_supervisor() {
