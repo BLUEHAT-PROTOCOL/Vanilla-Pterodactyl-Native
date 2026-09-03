@@ -151,6 +151,8 @@ LOGIN_RESP=$(curl -s -w '\n%{http_code}' -b "$JAR" -c "$JAR" -X POST $PANEL_URL/
   -d "user=admin@example.com&password=e2epassword")
 LOGIN_CODE=$(echo "$LOGIN_RESP" | tail -1)
 check "panel: admin login accepted" bash -c "test '$LOGIN_CODE' = '200' && echo '$LOGIN_RESP' | grep -q '\"complete\":true'"
+# §17: the auth bundle references this SVG; a clean release must ship it.
+check "panel: login logo asset served (200)" bash -c "curl -s -o /dev/null -w '%{http_code}' $PANEL_URL/assets/svgs/pterodactyl.svg | grep -q 200"
 
 # login regenerates the session (and rotates the CSRF token). Refresh it from
 # an authenticated page — the admin layout emits <meta name="_token">.

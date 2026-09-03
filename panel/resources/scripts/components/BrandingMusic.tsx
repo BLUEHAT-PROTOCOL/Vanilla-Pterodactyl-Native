@@ -107,7 +107,7 @@ export default () => {
                     setVolume(v);
                     if (v > 0) setMuted(false);
                 }}
-                css={tw`w-20 accent-orange-400`}
+                css={tw`w-20`}
             />
         </div>
     );

@@ -26,13 +26,13 @@ if [ ! -x "$TC/go/bin/go" ]; then
 fi
 "$TC/go/bin/go" version
 
-echo "== [2/5] static PHP 8.3 CLI =="
+echo "== [2/5] static PHP 8.3 CLI (bulk flavor: includes sodium for lcobucci/jwt) =="
 if [ ! -x "$TC/php/php" ]; then
-  PHP_TGZ=$(curl -s --max-time 20 "https://dl.static-php.dev/static-php-cli/common/" | \
+  PHP_TGZ=$(curl -s --max-time 20 "https://dl.static-php.dev/static-php-cli/bulk/" | \
     grep -oE 'php-8\.3\.[0-9]+-cli-linux-x86_64\.tar\.gz' | sort -V | tail -1)
   echo "php tarball: $PHP_TGZ"
   mkdir -p "$TC/php"
-  curl -sL -o "$DL/$PHP_TGZ" "https://dl.static-php.dev/static-php-cli/common/$PHP_TGZ"
+  curl -sL -o "$DL/$PHP_TGZ" "https://dl.static-php.dev/static-php-cli/bulk/$PHP_TGZ"
   tar -C "$TC/php" -xzf "$DL/$PHP_TGZ"
 fi
 "$TC/php/php" -v | head -1

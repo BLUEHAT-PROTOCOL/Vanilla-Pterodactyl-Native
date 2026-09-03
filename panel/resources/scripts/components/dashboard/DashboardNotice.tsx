@@ -22,7 +22,7 @@ export default () => {
             {notice?.enabled && (
                 <div css={tw`text-center`}>
                     {notice.title && (
-                        <p css={tw`font-mono text-lg font-bold tracking-wider text-orange-300 sm:text-xl`}>
+                        <p css={tw`font-mono text-lg font-bold tracking-wider text-yellow-300 sm:text-xl`}>
                             [ {notice.title} ]
                         </p>
                     )}
@@ -39,7 +39,7 @@ export default () => {
                             href={link.url}
                             target={'_blank'}
                             rel={'noopener noreferrer'}
-                            css={tw`inline-flex items-center gap-1 rounded-lg bg-neutral-700/70 px-3 py-1.5 text-xs font-medium text-neutral-100 transition-colors hover:bg-orange-500 hover:text-neutral-900 sm:text-sm`}
+                            css={tw`inline-flex items-center gap-1 rounded-lg bg-neutral-700/70 px-3 py-1.5 text-xs font-medium text-neutral-100 transition-colors hover:bg-cyan-500 hover:text-neutral-900 sm:text-sm`}
                         >
                             {link.icon && <img src={link.icon} alt={''} css={tw`h-4 w-4`} />}
                             {link.label}
